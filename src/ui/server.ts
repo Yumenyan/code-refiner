@@ -5,7 +5,8 @@ import { mkdir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { resolveConfig, type Config } from '../core/config.js';
 import { scanZipBuffer } from '../core/scanner.js';
-import { refineProject, writeOutputs } from '../pipeline.js';
+import { refineProject } from '../pipeline.js';
+import { writeOutputs } from '../node.js';
 import { UI_HTML } from './page.js';
 
 export interface UiOptions {

@@ -1,8 +1,3 @@
-import { spawn } from 'node:child_process';
-import { mkdtemp, rm, symlink, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { writeFiles } from '../core/output.js';
 import type { ValidationCommand } from '../core/types.js';
 
 export interface CommandOutcome {
@@ -13,8 +8,9 @@ export interface CommandOutcome {
 export type CommandRunner = (command: string, cwd: string, timeoutMs: number) => Promise<CommandOutcome>;
 
 /** Runs a project script in a shell. Only used when the user explicitly enables `runCommands`. */
-export const shellRunner: CommandRunner = (command, cwd, timeoutMs) =>
-  new Promise((resolve) => {
+export const shellRunner: CommandRunner = async (command, cwd, timeoutMs) => {
+  const { spawn } = await import('node:child_process');
+  return new Promise((resolve) => {
     const child = spawn(command, { cwd, shell: true, env: { ...process.env, CI: '1', FORCE_COLOR: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     let timedOut = false;
@@ -37,6 +33,7 @@ export const shellRunner: CommandRunner = (command, cwd, timeoutMs) =>
       resolve({ code: 127, output: String(e), timedOut });
     });
   });
+};
 
 export interface CommandCheck {
   command: ValidationCommand;
@@ -56,6 +53,10 @@ export async function runCommandChecks(
   refined: { path: string; data: Buffer }[],
   opts: { timeoutMs: number; nodeModules?: string; runner?: CommandRunner },
 ): Promise<CommandCheck[]> {
+  const { mkdtemp, rm, symlink, stat } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { writeFiles } = await import('../core/output.js');
   const runner = opts.runner ?? shellRunner;
   const results: CommandCheck[] = [];
   if (!commands.length) return results;

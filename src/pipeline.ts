@@ -1,6 +1,3 @@
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { createAdvisor } from './ai/anthropic.js';
 import type { AIAdvisor } from './ai/advisor.js';
 import { analyzeComplexity } from './analysis/complexity.js';
@@ -8,13 +5,11 @@ import { analyzeCrossReferences, type CrossRefModel } from './analysis/crossref.
 import { analyzeDeadCode } from './analysis/deadcode.js';
 import { detectDuplicates } from './analysis/duplicates.js';
 import { resolveConfig, type Config } from './core/config.js';
-import { diffFile, unifiedDiff, type FileDiff } from './core/diff.js';
+import { diffFile, type FileDiff } from './core/diff.js';
 import { detectMetadata } from './core/metadata.js';
-import { copyableFiles, resetDir, writeFiles } from './core/output.js';
-import { decodeText, encodeText, scanInput } from './core/scanner.js';
+import { copyableFiles, decodeText, encodeText } from './core/scanner.js';
 import type { Change, Project, ProjectFile, ProjectMetadata, Suggestion, Warning } from './core/types.js';
-import { writeZip } from './core/zip.js';
-import { createDefaultRegistry, type LanguageRegistry, type LanguagePack } from './languages/index.js';
+import { createRegistry, type LanguageRegistry, type LanguagePack } from './languages/index.js';
 import type { ProjectContext, RefineOutput } from './languages/types.js';
 import { classifyConfidence, namingContextFrom } from './naming/engine.js';
 import { detectConvention, type NamingConvention } from './naming/convention.js';
@@ -23,7 +18,6 @@ import type { FileModels } from './semantic/model.js';
 import { buildProjectModel, type ProjectModel } from './semantic/project.js';
 import { runCommandChecks, type CommandCheck, type CommandRunner } from './validation/commands.js';
 import { disabledReport, validateFiles, type FileState, type ValidationReport } from './validation/validator.js';
-import { renderReportHtml } from './report/html.js';
 
 export type FileStatus = 'changed' | 'unchanged' | 'ignored' | 'omitted' | 'binary' | 'unsupported' | 'rolled-back' | 'skipped';
 
@@ -85,6 +79,8 @@ export interface RefineResult {
 export interface RefineOptions {
   registry?: LanguageRegistry;
   advisor?: AIAdvisor;
+  /** Use locally installed native formatters. Defaults to true under Node. */
+  native?: boolean;
   env?: NodeJS.ProcessEnv;
   commandRunner?: CommandRunner;
   /** Directory whose node_modules may be linked into validation sandboxes. */
@@ -128,7 +124,7 @@ function prettierOverrides(project: Project): Record<string, unknown> {
 async function loadExternalPacks(registry: LanguageRegistry, specs: string[], warnings: Warning[]): Promise<void> {
   for (const spec of specs) {
     try {
-      const target = spec.startsWith('.') || spec.startsWith('/') ? pathToFileURL(resolve(spec)).href : spec;
+      const target = spec.startsWith('.') || spec.startsWith('/') ? (await import('node:url')).pathToFileURL((await import('node:path')).resolve(spec)).href : spec;
       const mod = (await import(target)) as { default?: LanguagePack | LanguagePack[]; languagePacks?: LanguagePack[] };
       const packs = mod.languagePacks ?? (Array.isArray(mod.default) ? mod.default : mod.default ? [mod.default] : []);
       if (!packs.length) throw new Error('module exports no Language Pack');
@@ -144,7 +140,7 @@ export async function refineProject(project: Project, configInput: Partial<Confi
   const config = resolveConfig(configInput);
   const log = options.log ?? (() => undefined);
   const warnings: Warning[] = [];
-  const registry = options.registry ?? createDefaultRegistry({ prettier: prettierOverrides(project) as never });
+  const registry = options.registry ?? (await createRegistry({ prettier: prettierOverrides(project) as never, native: options.native }));
   await loadExternalPacks(registry, config.languagePacks, warnings);
 
   const ai = options.advisor ? { advisor: options.advisor } : createAdvisor(config, options.env);
@@ -172,6 +168,13 @@ export async function refineProject(project: Project, configInput: Partial<Confi
 
   // ---- Phase 2/3: parse + semantic analysis --------------------------------------------------
   const models = new Map<string, FileModels>();
+  for (const pack of new Set(analyzable.map((f) => registry.forFile(f.path)!))) {
+    try {
+      await pack.init?.();
+    } catch (e) {
+      warnings.push({ code: 'pack-init', message: `${pack.displayName}: ${(e as Error).message}` });
+    }
+  }
   for (const f of analyzable) {
     const pack = registry.forFile(f.path)!;
     try {
@@ -420,37 +423,4 @@ export async function refineProject(project: Project, configInput: Partial<Confi
     original,
     aiUsed: !!advisor,
   };
-}
-
-export interface RunOptions extends RefineOptions {
-  outDir: string;
-}
-
-/** Scans `input` (ZIP or folder), refines it and writes original/, refined/, report and ZIP into outDir. */
-export async function refine(input: string, outDir: string, configInput: Partial<Config> | Config = {}, options: RefineOptions = {}): Promise<RefineResult & { outDir: string }> {
-  const config = resolveConfig(configInput);
-  const project = await scanInput(input, config);
-  const nodeModulesDir = options.nodeModulesDir ?? (project.source === 'folder' ? join(resolve(input), 'node_modules') : undefined);
-  const result = await refineProject(project, config, { ...options, nodeModulesDir });
-  await writeOutputs(result, outDir);
-  return { ...result, outDir: resolve(outDir) };
-}
-
-export async function writeOutputs(result: RefineResult, outDir: string): Promise<void> {
-  const out = resolve(outDir);
-  await mkdir(out, { recursive: true });
-  await resetDir(join(out, 'original'));
-  await resetDir(join(out, 'refined'));
-  const toList = (m: Map<string, Buffer>) => [...m.entries()].map(([path, data]) => ({ path, data }));
-  await writeFiles(join(out, 'original'), toList(result.original));
-  await writeFiles(join(out, 'refined'), toList(result.refined));
-  await writeFile(join(out, 'refined-project.zip'), writeZip(toList(result.refined)));
-  await writeFile(join(out, 'changes.diff'), result.diffs.map(unifiedDiff).join('\n'));
-  await writeFile(join(out, 'report.json'), JSON.stringify(serializable(result), null, 2));
-  await writeFile(join(out, 'report.html'), renderReportHtml(result));
-}
-
-export function serializable(result: RefineResult): unknown {
-  const { refined: _refined, original: _original, ...rest } = result;
-  return rest;
 }

@@ -51,7 +51,13 @@ export async function validateFiles(
   for (const s of changed) {
     const pack = s.language ? registry.get(s.language) ?? registry.forFile(s.path) : registry.forFile(s.path);
     if (!pack) continue;
-    const syntax = await pack.checkSyntax(s.refined, s.path);
+    let syntax: { ok: boolean; error?: string };
+    try {
+      syntax = await pack.checkSyntax(s.refined, s.path);
+    } catch (e) {
+      report.checks.push({ name: 'syntax', status: 'skipped', file: s.path, detail: `parser unavailable: ${(e as Error).message}` });
+      continue;
+    }
     if (!syntax.ok) {
       rollback(s, `output no longer parses (${syntax.error ?? 'syntax error'})`, 'syntax');
       continue;

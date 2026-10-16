@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { fingerprint } from '../core/text.js';
 import type { Suggestion } from '../core/types.js';
 import type { FileModels } from '../semantic/model.js';
 
@@ -74,7 +74,7 @@ export function detectDuplicates(models: Map<string, FileModels>, texts: Map<str
     for (let i = 0; i + WINDOW <= kept.length; i++) {
       const slice = kept.slice(i, i + WINDOW);
       if (slice.reduce((a, b) => a + b.text.length, 0) < WINDOW * 12) continue;
-      const h = createHash('sha1').update(slice.map((x) => x.text).join('\n')).digest('hex').slice(0, 16);
+      const h = fingerprint(slice.map((x) => x.text).join('\n'));
       const list = windows.get(h) ?? [];
       list.push({ file, start: slice[0].line, end: slice[slice.length - 1].line });
       windows.set(h, list);

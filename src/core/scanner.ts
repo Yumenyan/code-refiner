@@ -1,5 +1,3 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { join, basename as pbasename, resolve } from 'node:path';
 import type { Config } from './config.js';
 import { detectLanguage, isBinary } from './detect.js';
 import { globToRegExp, matchesAny } from './glob.js';
@@ -19,11 +17,11 @@ export const DEFAULT_IGNORE = [
   'Cargo.lock', 'bun.lockb', 'composer.lock', 'Gemfile.lock', 'poetry.lock',
 ];
 
-interface Classifier {
+export interface Classifier {
   classify(path: string): { ignored: boolean; omitted: boolean; reason?: string };
 }
 
-function makeClassifier(cfg: Config): Classifier {
+export function makeClassifier(cfg: Config): Classifier {
   const omit = [...DEFAULT_OMIT, ...cfg.omit].map((p) => ({ p, re: globToRegExp(p) }));
   const ignore = [...DEFAULT_IGNORE, ...cfg.ignore].map((p) => ({ p, re: globToRegExp(p) }));
   const include = cfg.include.map(globToRegExp);
@@ -39,7 +37,7 @@ function makeClassifier(cfg: Config): Classifier {
   };
 }
 
-function build(path: string, size: number, data: Buffer | undefined, cls: Classifier, cfg: Config): ProjectFile {
+export function build(path: string, size: number, data: Buffer | undefined, cls: Classifier, cfg: Config): ProjectFile {
   const c = cls.classify(path);
   const f: ProjectFile = {
     path,
@@ -62,48 +60,13 @@ function build(path: string, size: number, data: Buffer | undefined, cls: Classi
   return f;
 }
 
-export async function scanFolder(dir: string, cfg: Config): Promise<Project> {
-  const root = resolve(dir);
-  const st = await stat(root).catch(() => null);
-  if (!st?.isDirectory()) throw new Error(`Not a directory: ${dir}`);
-  const cls = makeClassifier(cfg);
-  const files: ProjectFile[] = [];
-
-  async function walk(rel: string): Promise<void> {
-    const entries = await readdir(join(root, rel), { withFileTypes: true });
-    entries.sort((a, b) => (a.name < b.name ? -1 : 1));
-    for (const e of entries) {
-      const p = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isSymbolicLink()) continue; // never follow links out of the project
-      if (e.isDirectory()) {
-        const c = cls.classify(p + '/');
-        if (c.omitted) {
-          files.push({ path: p + '/', size: 0, kind: 'text', ignored: true, omitted: true, ignoreReason: c.reason });
-          continue;
-        }
-        await walk(p);
-      } else if (e.isFile()) {
-        const full = join(root, p);
-        const s = await stat(full);
-        const c = cls.classify(p);
-        if (c.omitted) {
-          files.push({ path: p, size: s.size, kind: 'text', ignored: true, omitted: true, ignoreReason: c.reason });
-          continue;
-        }
-        files.push(build(p, s.size, await readFile(full), cls, cfg));
-      }
-    }
-  }
-  await walk('');
-  return { name: pbasename(root), source: 'folder', files };
-}
-
 export function scanEntries(
   name: string,
-  entries: { path: string; data: Buffer }[],
+  rawEntries: { path: string; data: Uint8Array }[],
   cfg: Config,
   source: Project['source'] = 'memory',
 ): Project {
+  const entries = rawEntries.map((e) => ({ path: e.path, data: Buffer.isBuffer(e.data) ? e.data : Buffer.from(e.data.buffer, e.data.byteOffset, e.data.byteLength) }));
   const cls = makeClassifier(cfg);
   const files = entries
     .map((e) => {
@@ -117,23 +80,12 @@ export function scanEntries(
   return { name, source, files };
 }
 
-export async function scanZip(zipPath: string, cfg: Config): Promise<Project> {
-  const buf = await readFile(zipPath);
-  return scanZipBuffer(buf, pbasename(zipPath).replace(/\.zip$/i, ''), cfg);
-}
-
-export function scanZipBuffer(buf: Buffer, name: string, cfg: Config): Project {
+export function scanZipBuffer(buf: Uint8Array, name: string, cfg: Config): Project {
   const { entries, root } = stripSingleRoot(readZip(buf));
   return scanEntries(root ?? name, entries, cfg, 'zip');
 }
 
-export async function scanInput(input: string, cfg: Config): Promise<Project> {
-  const st = await stat(input).catch(() => null);
-  if (!st) throw new Error(`Input not found: ${input}`);
-  if (st.isDirectory()) return scanFolder(input, cfg);
-  if (/\.zip$/i.test(input)) return scanZip(input, cfg);
-  throw new Error('Input must be a ZIP file or a folder');
-}
+const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
 export function decodeText(f: ProjectFile): { text: string; bom: boolean } {
   const data = f.data ?? Buffer.alloc(0);
@@ -143,5 +95,9 @@ export function decodeText(f: ProjectFile): { text: string; bom: boolean } {
 
 export function encodeText(text: string, bom: boolean): Buffer {
   const body = Buffer.from(text, 'utf8');
-  return bom ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), body]) : body;
+  return bom ? Buffer.concat([BOM, body]) : body;
+}
+
+export function copyableFiles(files: ProjectFile[]): { path: string; data: Buffer }[] {
+  return files.filter((f) => !f.omitted && f.data).map((f) => ({ path: f.path, data: f.data! }));
 }

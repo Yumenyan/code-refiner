@@ -40,6 +40,16 @@ const EXT_LANGUAGE: Record<string, string> = {
   '.toml': 'toml',
   '.xml': 'xml',
   '.sh': 'shell',
+  '.bash': 'shell',
+  '.lua': 'lua',
+  '.scala': 'scala',
+  '.kts': 'kotlin',
+  '.cxx': 'cpp',
+  '.hh': 'cpp',
+  '.hxx': 'cpp',
+  '.graphql': 'graphql',
+  '.gql': 'graphql',
+  '.markdown': 'markdown',
 };
 
 const BINARY_EXT = new Set([

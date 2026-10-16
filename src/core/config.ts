@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import type { RefactorLevel } from './types.js';
 
 export interface NamingWeights {
@@ -152,6 +151,7 @@ export function resolveConfig(partial: unknown = {}): Config {
 }
 
 export async function loadConfigFile(path: string): Promise<Config> {
+  const { readFile } = await import('node:fs/promises');
   const text = await readFile(path, 'utf8');
   let parsed: unknown;
   try {

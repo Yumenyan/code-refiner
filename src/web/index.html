@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CodeRefiner</title>
+<meta name="description" content="Restructure machine-written code into human-maintainable projects. Runs entirely in your browser.">
+<style>
+:root{--bg:#fff;--fg:#1c1e21;--muted:#6b7280;--card:#f7f8fa;--line:#d9dde3;--accent:#2457d6;--accent-fg:#fff;--bad:#b42318;--ok:#16794a}
+@media (prefers-color-scheme:dark){:root{--bg:#14161a;--fg:#e6e8eb;--muted:#9aa3ad;--card:#1d2026;--line:#333844;--accent:#6f98ff;--accent-fg:#0b1020;--bad:#ff7b72;--ok:#4cc38a}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;justify-content:center}
+main{width:100%;max-width:560px;padding:40px 16px 64px}h1{font-size:28px;margin:0 0 24px;letter-spacing:-.01em}
+#drop{border:2px dashed var(--line);border-radius:14px;padding:44px 16px;text-align:center;background:var(--card);cursor:pointer;transition:border-color .15s,background .15s}
+#drop.over{border-color:var(--accent)}#drop b{display:block;font-size:17px;margin-bottom:4px}#drop span{color:var(--muted);font-size:14px}
+#picked{margin-top:10px;color:var(--muted);font-size:14px;min-height:21px;word-break:break-all}
+fieldset{border:0;padding:0;margin:22px 0 0}legend{font-weight:600;margin-bottom:6px;padding:0}
+label{display:flex;gap:8px;align-items:flex-start;padding:5px 0;cursor:pointer}label small{color:var(--muted);display:block}
+button{font:inherit;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg);padding:10px 16px;cursor:pointer}
+button.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent);font-weight:600;width:100%;margin-top:26px;padding:13px}
+button:disabled{opacity:.5;cursor:default}#result{margin-top:30px;display:none}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;text-align:center}
+.stat b{display:block;font-size:26px}.stat span{color:var(--muted);font-size:13px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.actions>*{flex:1 1 140px;text-align:center;text-decoration:none}
+a.btn{font:inherit;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg);padding:10px 16px}
+#msg{margin-top:14px;font-size:14px;color:var(--muted)}#msg.err{color:var(--bad)}#where{margin-top:12px;color:var(--muted);font-size:13px;word-break:break-all}
+
+footer{margin-top:36px;color:var(--muted);font-size:13px}input[type=password]{font:inherit;width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);margin-top:6px}
+#aiKeyRow{display:none;margin:2px 0 0 26px}
+</style></head><body><main>
+<h1>CodeRefiner</h1>
+<div id="drop" tabindex="0" role="button" aria-label="Choose a ZIP file or folder"><b>Drop a ZIP or folder here</b><span>or click to choose a ZIP file · <a href="#" id="pickFolder">choose a folder</a></span></div>
+<input type="file" id="fileInput" accept=".zip,application/zip" hidden>
+<input type="file" id="folderInput" webkitdirectory multiple hidden>
+<div id="picked"></div>
+<fieldset><legend>Mode</legend>
+<label><input type="radio" name="mode" value="safe" checked><span>Safe<small>Only changes that cannot alter behaviour</small></span></label>
+<label><input type="radio" name="mode" value="cautious"><span>Cautious<small>Also applies well-supported inferences</small></span></label>
+<label><input type="radio" name="mode" value="aggressive"><span>Aggressive<small>Structural refactorings</small></span></label>
+<label><input type="checkbox" id="removeUnused"><span>Remove unused code<small>Unused imports, unreachable code (Cautious and above). Off = report only.</small></span></label>
+</fieldset>
+<fieldset><legend>AI</legend><label><input type="checkbox" id="ai"><span>Enable AI Advisor<small>Optional. Uses your own Anthropic API key; only variable names and small snippets are sent.</small></span></label>
+<div id="aiKeyRow"><input type="password" id="aiKey" placeholder="sk-ant-… (kept in memory only)" autocomplete="off"></div></fieldset>
+<button class="primary" id="go" disabled>REFINE</button>
+<div id="msg" role="status"></div>
+<section id="result">
+<div class="stats"><div class="stat"><b id="sFiles">0</b><span>Files</span></div><div class="stat"><b id="sChanged">0</b><span>Changed</span></div><div class="stat"><b id="sWarn">0</b><span>Warnings</span></div></div>
+<div class="actions"><a class="btn" id="report" target="_blank" rel="noopener">View Report</a><button id="save">Save to Folder</button><a class="btn" id="zip" download>Export ZIP</a></div>
+</section>
+<footer>Everything runs locally in your browser — your code is never uploaded. Native formatters (gofmt, rustfmt, ruff, clang-format…) are only available in the command-line version; here those languages are parsed and analysed but not reformatted. TypeScript type-check validation is CLI-only.</footer>
+<script type="module" src="main.js"></script>
+</main></body></html>

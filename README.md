@@ -16,6 +16,23 @@ Project → Scanner → Language Detection → Parser → AST/CST → Semantic A
         → Validation (+ Rollback) → Refined Project + Report
 ```
 
+## Web 版 (GitHub Pages)
+
+ブラウザだけで動く静的サイト版があります。**コードはサーバーに送信されず、すべてお使いのブラウザ内 (Web Worker) で処理されます。**
+ZIP またはフォルダをドロップ → Mode を選択 → REFINE → レポート表示 / ZIP 書き出し / (対応ブラウザでは) フォルダへ保存。
+AI Advisor を使う場合のみ、自分の Anthropic API キーを入力します (メモリ上にだけ保持。変数名と小さな断片だけを Anthropic に送ります)。
+
+```bash
+npm run build:web      # ./site に静的サイトを生成
+npm run serve:web      # http://127.0.0.1:4174/ でプレビュー
+```
+
+**GitHub Pages へのデプロイ**: `.github/workflows/pages.yml` が `main` / `master` への push (または手動実行) で、型チェック → テスト → `build:web` → デプロイまで行います。初回だけリポジトリの **Settings → Pages → Build and deployment → Source を「GitHub Actions」** に設定してください。公開 URL は `https://<owner>.github.io/<repo>/` です (すべて相対パスなのでサブパス配下でも動きます)。
+別ブランチで試す場合は Actions タブから "Deploy web version to GitHub Pages" を手動実行します (環境の保護ルールでブランチが許可されている必要があります)。
+GitHub Pages を使えない場合は、同じ `site/` をそのまま Netlify (`netlify.toml`) / Vercel (`vercel.json`) / Cloudflare Pages (ビルドコマンド `npm run build:web`、出力 `site`) などの静的ホスティングに置けます。
+
+ブラウザ版の制限: ネイティブ整形ツール (gofmt / rustfmt / ruff / clang-format …) と TypeScript 型チェック、build/test 実行は CLI 版のみです (対応言語は解析・構文チェックのみ行い、整形はしません)。
+
 ## クイックスタート
 
 ```bash
@@ -54,6 +71,23 @@ node dist/cli.js ui                       # http://127.0.0.1:4173/
 | `--remove-unused` | 未使用 import / 到達不能コード / 副作用のない未使用ローカルを削除 (cautious 以上) |
 | `--no-validate` | 検証を無効化 (非推奨) |
 | `--run-commands` | プロジェクトの build / test スクリプトも実行して検証 (**プロジェクトのコードを実行します**) |
+
+## 対応言語
+
+| 言語 | 構文チェック / 語彙 / 関数メトリクス / 重複検出 | 整形 | 意味解析・リネーム・リファクタリング |
+|---|---|---|---|
+| JavaScript / TypeScript (JSX/TSX 含む) | Babel | Prettier (同値性を AST で証明) | ✅ |
+| HTML / CSS / JSON | parse5 / postcss / JSON.parse | Prettier (同値性を検証) | HTML-CSS-JS 横断解析、限定的な安全ルール |
+| SCSS / Less / Markdown / YAML / Vue / GraphQL | Prettier の構文解析 | Prettier (再整形が不変であることを確認) | – |
+| Java / C# / C / C++ | tree-sitter | clang-format または google-java-format があれば (**トークン列が不変であることを証明できた場合のみ**採用) | – |
+| Go / Rust | tree-sitter | gofmt / rustfmt があれば | – |
+| Python | tree-sitter | ruff / black があれば (**AST が同一であることを `ast.dump` で確認**) | – |
+| Ruby / PHP / Kotlin / Swift / Shell / Scala | tree-sitter | (Shell は shfmt があれば) | – |
+
+tree-sitter 系の言語は WebAssembly パーサで構文を検証します。構文エラーのあるファイルは**無変更のままコピー**し警告を出します。
+関数単位の行数・ネスト・引数・分岐数 (Complexity)、構造が同一の関数 (Duplicate)、プロジェクト語彙 (Vocabulary) は全言語で解析されます。
+ネイティブ整形ツールは**インストールされている場合のみ**使われ、無ければ解析のみで整形はスキップされます。整形結果は必ず検証ゲートを通り、証明できなければ元のままにします。
+意味解析・リファクタリングルールを持つのは現状 JS / TS のみです (他言語は Language Pack の `refine()` にルールを追加して拡張できます)。
 
 ## リファクタリングレベル
 
@@ -130,9 +164,13 @@ src/
 │   ├── html/        (parse5)
 │   ├── css/         (postcss)
 │   ├── json/
-│   └── external/    Python (ruff|black) / Rust (rustfmt) — インストールされている場合のみ有効
+│   ├── prettier-langs/  SCSS / Less / Markdown / YAML / Vue / GraphQL
+│   ├── treesitter/  Java / C# / Go / Python / Rust / Ruby / PHP / Kotlin / Swift / C / C++ / Shell / Scala
+│   └── external/    gofmt / rustfmt / ruff / black / clang-format / google-java-format / shfmt のアダプタ (Node のみ)
 ├── pipeline.ts      解析 → 変換 → 検証 → 出力のオーケストレーション
+├── node.ts          Node 用の入出力 (フォルダ/ZIP 入力、original/ refined/ レポートの書き出し)
 ├── cli.ts / ui/     CLI とローカル Web UI (127.0.0.1 のみ)
+├── web/             ブラウザ版 (Web Worker + 静的サイト)。`scripts/build-web.mjs` で ./site を生成
 ```
 
 Core は特定言語・特定ツールに依存しません。Prettier などは **Formatter Adapter**、recast は **Code Printer** として Language Pack の内側に閉じています。
@@ -169,7 +207,7 @@ UPDATE_GOLDEN=1 npx vitest run tests/golden.test.ts   # ゴールデンの意図
 ## 現時点の制限 / ロードマップ
 
 - **Browser Runtime Analysis** (実ブラウザでの DOM / Console / Network 取得) は計画書どおり後回しで、未実装です。
-- 意味解析・リネーム・リファクタリングルールは JS / TS が対象です。HTML / CSS / JSON は構造解析・横断解析・整形・限定的な安全ルール、Python / Rust は整形と構文チェックのみです。Java / C# などは Language Pack の追加で対応できます。
+- 意味解析・リネーム・リファクタリングルールは JS / TS が対象です。HTML / CSS / JSON は構造解析・横断解析・整形・限定的な安全ルール、その他の言語は「対応言語」の表のとおり構文チェック・メトリクス・(ツールがあれば) 整形までです。変数の使用関係・Data Flow・Call Graph を持つ言語は JS / TS だけで、他言語の Call Graph / 未使用コード検出は未対応です。
 - Prettier の既定に近い書式で出力します。インデント (タブ/2/4)・引用符・`printWidth` は入力から推定し、プロジェクトの `.prettierrc` (JSON) があれば優先します。
 - 型チェックは TypeScript のみ。JS の `checkJs` は対象外です。`node_modules` はコピーされないため、解決できない import による診断は変換前後で相殺されます。
 - 解析 (未使用コード・重複・複雑度) の行番号は**元ファイル**のものです。

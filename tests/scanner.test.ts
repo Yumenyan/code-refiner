@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import AdmZip from 'adm-zip';
 import { describe, expect, it } from 'vitest';
 import { resolveConfig } from '../src/core/config.js';
-import { scanFolder, scanZipBuffer } from '../src/core/scanner.js';
+import { scanZipBuffer } from '../src/core/scanner.js';
+import { scanFolder } from '../src/core/scan-node.js';
 import { safeEntryPath } from '../src/core/zip.js';
 import { globToRegExp } from '../src/core/glob.js';
 

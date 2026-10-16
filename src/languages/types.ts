@@ -74,6 +74,8 @@ export interface LanguagePack {
   /** Introspection: the rules this pack applies, per level. */
   rules: Pick<Rule<unknown>, 'id' | 'description' | 'level'>[];
 
+  /** Loads parsers / WebAssembly before first use. Awaited by the pipeline for every pack a project needs. */
+  init?(): Promise<void>;
   checkSyntax(source: string, file: string): Promise<SyntaxOutcome> | SyntaxOutcome;
   /** Extracts semantic information for project-wide analyses. Must not throw on bad input. */
   analyze?(input: AnalyzeInput): FileModels;

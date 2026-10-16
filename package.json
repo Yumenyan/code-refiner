@@ -12,7 +12,9 @@
     "test": "vitest run",
     "start": "node dist/cli.js",
     "ui": "node dist/cli.js ui",
-    "prepare": "tsc -p tsconfig.json"
+    "prepare": "tsc -p tsconfig.json",
+    "build:web": "node scripts/build-web.mjs",
+    "serve:web": "node scripts/serve-web.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -22,18 +24,23 @@
     "@babel/parser": "^7.29.9",
     "@babel/traverse": "^7.29.10",
     "@babel/types": "^7.29.8",
-    "adm-zip": "^0.6.1",
+    "buffer": "^6.0.3",
+    "fflate": "^0.8.3",
     "parse5": "^8.0.1",
     "postcss": "^8.5.30",
     "postcss-selector-parser": "^7.1.6",
     "prettier": "^3.9.10",
     "recast": "^0.24.0",
-    "typescript": "^5.9.3"
+    "tree-sitter-wasms": "^0.1.13",
+    "typescript": "^5.9.3",
+    "web-tree-sitter": "^0.22.6"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",
     "@types/babel__traverse": "^7.28.0",
     "@types/node": "^26.6.5",
+    "adm-zip": "^0.6.1",
+    "esbuild": "^0.28.2",
     "vitest": "^5.0.5"
   },
   "files": [

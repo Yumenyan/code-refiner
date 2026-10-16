@@ -1,4 +1,5 @@
-import * as prettier from 'prettier';
+import type { Options as PrettierOptions } from 'prettier';
+import { getPrettier } from './prettier-api.js';
 import type { FormatterAdapter } from './types.js';
 
 export interface PrettierFormatterOptions {
@@ -47,18 +48,18 @@ function inferPrintWidth(source: string): number {
  * explicitly (parsed from the project's own `.prettierrc`), never discovered on
  * the machine running CodeRefiner.
  */
-export function prettierFormatter(opts: PrettierFormatterOptions, overrides: prettier.Options = {}): FormatterAdapter {
+export function prettierFormatter(opts: PrettierFormatterOptions, overrides: PrettierOptions = {}): FormatterAdapter {
   return {
     id: `prettier:${opts.parser}`,
     async format(source) {
-      const base: prettier.Options = {
+      const base: PrettierOptions = {
         printWidth: opts.inferQuotes ? inferPrintWidth(source) : 100,
         tabWidth: 2,
         endOfLine: 'auto',
         ...(opts.inferQuotes ? { singleQuote: inferSingleQuote(source) } : {}),
         ...(opts.inferQuotes ? inferIndent(source) ?? {} : {}),
       };
-      return prettier.format(source, { ...base, ...overrides, parser: opts.parser });
+      return (await getPrettier()).format(source, { ...base, ...overrides, parser: opts.parser });
     },
   };
 }

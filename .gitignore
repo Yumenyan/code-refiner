@@ -3,3 +3,4 @@ dist/
 coverage/
 .coderefiner-out/
 *.log
+site/

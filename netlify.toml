@@ -1,0 +1,9 @@
+# Static hosting alternative to GitHub Pages: connect the repository and deploy as-is.
+[build]
+  command = "npm ci && npm run build:web"
+  publish = "site"
+
+[[headers]]
+  for = "/wasm/*"
+  [headers.values]
+    Content-Type = "application/wasm"

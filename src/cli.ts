@@ -2,7 +2,7 @@
 import { writeFile, stat } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import { DEFAULT_CONFIG, loadConfigFile, resolveConfig, ConfigError, type Config } from './core/config.js';
-import { refine } from './pipeline.js';
+import { refine } from './node.js';
 import { createDefaultRegistry } from './languages/index.js';
 import { startUi } from './ui/server.js';
 

@@ -11,6 +11,7 @@ export class AnthropicAdvisor implements AIAdvisor {
     private readonly apiKey: string,
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly maxCalls = 200,
+    private readonly extraHeaders: Record<string, string> = {},
   ) {}
 
   async adviseName(req: NamingAdviceRequest): Promise<NamingAdvice | null> {
@@ -45,6 +46,7 @@ export class AnthropicAdvisor implements AIAdvisor {
           'content-type': 'application/json',
           'x-api-key': this.apiKey,
           'anthropic-version': '2023-06-01',
+          ...this.extraHeaders,
         },
         body: JSON.stringify({
           model: this.cfg.model,
@@ -64,7 +66,7 @@ export class AnthropicAdvisor implements AIAdvisor {
   }
 }
 
-export function createAdvisor(cfg: Config, env: NodeJS.ProcessEnv = process.env): { advisor?: AIAdvisor; warning?: string } {
+export function createAdvisor(cfg: Config, env: Record<string, string | undefined> = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {}): { advisor?: AIAdvisor; warning?: string } {
   if (!cfg.aiAdvisor) return {};
   const key = env[cfg.ai.apiKeyEnv];
   if (!key) {

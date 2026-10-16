@@ -1,7 +1,7 @@
 import postcss from 'postcss';
 import type { Root, Rule as PostcssRule, Declaration, AtRule, ChildNode, Container } from 'postcss';
 import selectorParser from 'postcss-selector-parser';
-import { createHash } from 'node:crypto';
+import { fingerprint } from '../../core/text.js';
 import { hitToChange, rulesFor, type Rule, type RuleHit } from '../../core/rule-engine.js';
 import type { Loc } from '../../core/types.js';
 import type { CssFileModel, CssSelectorInfo } from '../../semantic/model.js';
@@ -130,7 +130,7 @@ export function analyzeCss(source: string, file: string): CssFileModel | null {
       const decls = (n.nodes ?? []).filter((c): c is Declaration => c.type === 'decl');
       if (decls.length >= 2) {
         const key = decls.map((d) => `${d.prop.toLowerCase()}:${d.value.replace(/\s+/g, ' ')}${d.important ? '!' : ''}`).sort().join(';');
-        model.blockHashes.push({ hash: createHash('sha1').update(key).digest('hex').slice(0, 16), selector: n.selector.replace(/\s+/g, ' '), loc: loc(n), decls: decls.length });
+        model.blockHashes.push({ hash: fingerprint(key), selector: n.selector.replace(/\s+/g, ' '), loc: loc(n), decls: decls.length });
       }
     } else if (n.type === 'decl') {
       if (n.prop.startsWith('--')) model.customPropsDeclared.push({ name: n.prop, loc: loc(n) });

@@ -1,7 +1,6 @@
 import * as t from '@babel/types';
-import { createHash } from 'node:crypto';
 import type { Loc } from '../../core/types.js';
-import { snippet } from '../../core/text.js';
+import { fingerprint, snippet } from '../../core/text.js';
 import type {
   CallEdge, DataFlowEdge, DomRef, ExportInfo, FileSemantic, FunctionInfo, ImportInfo, UnreachableCode, VariableInfo,
 } from '../../semantic/model.js';
@@ -146,7 +145,7 @@ function structuralHash(fn: NodePath<t.Function>): { hash: string; size: number 
   };
   visit(fn.node.body);
   fn.node.params.forEach((p) => visit(p));
-  return { hash: createHash('sha1').update(parts.join(' ')).digest('hex').slice(0, 16), size };
+  return { hash: fingerprint(parts.join(' ')), size };
 }
 
 const BRANCHY = new Set(['IfStatement', 'ConditionalExpression', 'ForStatement', 'ForInStatement', 'ForOfStatement', 'WhileStatement', 'DoWhileStatement', 'CatchClause']);

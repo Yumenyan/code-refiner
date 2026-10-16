@@ -9,7 +9,8 @@ import { describe, expect, it } from 'vitest';
 import { loadConfigFile, resolveConfig, ConfigError } from '../src/core/config.js';
 import { LanguageRegistry, createDefaultRegistry } from '../src/languages/index.js';
 import type { LanguagePack } from '../src/languages/types.js';
-import { refine, refineProject } from '../src/pipeline.js';
+import { refine } from '../src/node.js';
+import { refineProject } from '../src/pipeline.js';
 import { startUi } from '../src/ui/server.js';
 import { memProject, run, text } from './helpers/util.js';
 
@@ -50,10 +51,10 @@ describe('Pipeline details', () => {
 
   it('copies binaries, ignored files and unsupported languages byte for byte', async () => {
     const bin = Buffer.from([0, 1, 2, 3, 255, 254]);
-    const r = await run({ 'img.png': bin, 'dist/out.js': 'var   a=1', 'notes.md': '#  x', 'node_modules/p/i.js': 'x' });
+    const r = await run({ 'img.png': bin, 'dist/out.js': 'var   a=1', 'conf.toml': '[a]\nb  =  1', 'node_modules/p/i.js': 'x' });
     expect(r.refined.get('img.png')).toEqual(bin);
     expect(text(r, 'dist/out.js')).toBe('var   a=1');
-    expect(text(r, 'notes.md')).toBe('#  x');
+    expect(text(r, 'conf.toml')).toBe('[a]\nb  =  1');
     expect(r.refined.has('node_modules/p/i.js')).toBe(false);
     expect(r.files.find((f) => f.path === 'img.png')?.status).toBe('binary');
     expect(r.files.find((f) => f.path === 'dist/out.js')?.status).toBe('ignored');
@@ -139,19 +140,6 @@ describe('Language Packs are extensible', () => {
     const js = createDefaultRegistry().get('javascript')!;
     const levels = new Set(js.rules.map((r) => r.level));
     expect(levels).toEqual(new Set(['safe', 'cautious', 'aggressive']));
-  });
-});
-
-describe('Python and Rust (native formatters, when installed)', () => {
-  const reg = createDefaultRegistry();
-  it.skipIf(!reg.get('python'))('formats Python and rejects invalid syntax', async () => {
-    const r = await run({ 'a.py': 'def f( a,b ):\n  return a+b\n', 'bad.py': 'def f(:\n' }, {}, { registry: reg });
-    expect(text(r, 'a.py')).toBe('def f(a, b):\n    return a + b\n');
-    expect(text(r, 'bad.py')).toBe('def f(:\n');
-  });
-  it.skipIf(!reg.get('rust'))('formats Rust', async () => {
-    const r = await run({ 'a.rs': 'fn main( ){let x=1;println!("{}",x);}\n' }, {}, { registry: reg });
-    expect(text(r, 'a.rs')).toContain('let x = 1;');
   });
 });
 

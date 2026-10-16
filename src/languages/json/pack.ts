@@ -1,7 +1,15 @@
-import { isDeepStrictEqual } from 'node:util';
+import { getPrettier } from '../prettier-api.js';
+
+function isDeepStrictEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  return ka.length === kb.length && ka.every((k) => k in b && isDeepStrictEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+}
 import { basename } from '../../core/text.js';
 import type { FormatterAdapter, LanguagePack } from '../types.js';
-import * as prettier from 'prettier';
 
 function tryParse(s: string): { ok: true; value: unknown } | { ok: false } {
   try {
@@ -18,7 +26,7 @@ export function jsonFormatter(): FormatterAdapter {
     id: 'prettier:json',
     async format(source, file) {
       const parser = STRINGIFY_FILES.has(basename(file)) ? 'json-stringify' : 'json';
-      return prettier.format(source, { parser, tabWidth: 2, endOfLine: 'auto' });
+      return (await getPrettier()).format(source, { parser, tabWidth: 2, endOfLine: 'auto' });
     },
   };
 }
@@ -27,7 +35,7 @@ export function jsonPack(formatter: FormatterAdapter = jsonFormatter()): Languag
   const check = (source: string) => {
     if (tryParse(source).ok) return { ok: true };
     // JSON with comments (tsconfig.json, .eslintrc ...): accept when Prettier's tolerant parser can read it.
-    return prettier.format(source, { parser: 'json' }).then(
+    return getPrettier().then((p) => p.format(source, { parser: 'json' })).then(
       () => ({ ok: true }),
       (e: Error) => ({ ok: false, error: e.message }),
     );

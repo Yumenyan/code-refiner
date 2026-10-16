@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
-import { refine } from '../src/pipeline.js';
+import { refine } from '../src/node.js';
 import { createDefaultRegistry } from '../src/languages/index.js';
 
 const FIXTURE = join(import.meta.dirname, 'fixtures/golden-project');

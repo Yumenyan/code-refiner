@@ -1,9 +1,9 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { dirname, resolve, sep } from 'node:path';
-import type { ProjectFile } from './types.js';
+/** Node-only file output helpers (dynamic imports keep the browser bundle free of Node built-ins). */
 
 /** Writes files below `root`, refusing any path that would escape it. */
-export async function writeFiles(root: string, files: { path: string; data: Buffer }[]): Promise<void> {
+export async function writeFiles(root: string, files: { path: string; data: Uint8Array }[]): Promise<void> {
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const { dirname, resolve, sep } = await import('node:path');
   const base = resolve(root);
   for (const f of files) {
     const target = resolve(base, f.path);
@@ -13,11 +13,8 @@ export async function writeFiles(root: string, files: { path: string; data: Buff
   }
 }
 
-export function copyableFiles(files: ProjectFile[]): { path: string; data: Buffer }[] {
-  return files.filter((f) => !f.omitted && f.data).map((f) => ({ path: f.path, data: f.data! }));
-}
-
 export async function resetDir(dir: string): Promise<void> {
+  const { mkdir, rm } = await import('node:fs/promises');
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
 }
