@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Stations</title>
+    <link rel="stylesheet" href="messy.css" />
+    <style>
+      .banner {
+        color: red;
+        margin: 0;
+      }
+      .unused-banner {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app" class="container">
+      <h1 class="title">Stations</h1>
+      <button id="open-btn" class="btn primary">Open</button
+      ><button onclick="clearAll()" class="btn">Clear</button>
+      <ul id="station-list" class="list"></ul>
+    </div>
+    <script src="messy.js"></script>
+    <script>
+      function clearAll() {
+        const x = document.getElementById("station-list");
+        x.innerHTML = "";
+      }
+    </script>
+  </body>
+</html>

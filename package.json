@@ -1,0 +1,52 @@
+{
+  "name": "code-refiner",
+  "version": "0.1.0",
+  "description": "Safely restructure machine-written code into human-maintainable projects.",
+  "type": "module",
+  "bin": {
+    "code-refiner": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "node dist/cli.js",
+    "ui": "node dist/cli.js ui",
+    "prepare": "tsc -p tsconfig.json"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@babel/parser": "^7.29.9",
+    "@babel/traverse": "^7.29.10",
+    "@babel/types": "^7.29.8",
+    "adm-zip": "^0.6.1",
+    "parse5": "^8.0.1",
+    "postcss": "^8.5.30",
+    "postcss-selector-parser": "^7.1.6",
+    "prettier": "^3.9.10",
+    "recast": "^0.24.0",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
+    "@types/babel__traverse": "^7.28.0",
+    "@types/node": "^26.6.5",
+    "vitest": "^5.0.5"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "coderefiner.config.example.json"
+  ],
+  "keywords": [
+    "refactoring",
+    "code-quality",
+    "formatter",
+    "ast",
+    "naming"
+  ]
+}

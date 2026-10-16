@@ -1,0 +1,32 @@
+.container {
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 10px;
+}
+.btn {
+  padding: 4px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #eee;
+}
+.btn.primary {
+  background: #2457d6;
+  color: #fff;
+}
+.title {
+  font-size: 20px;
+  margin: 0;
+}
+.list {
+  list-style: none;
+  padding: 0;
+}
+.station-item {
+  padding: 2px 0;
+}
+.station-item.active {
+  font-weight: bold;
+}
+.never-used {
+  color: blue;
+}
