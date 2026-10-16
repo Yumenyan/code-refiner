@@ -3,6 +3,8 @@ import type { FileDiff } from '../core/diff.js';
 import type { RefineResult } from '../pipeline.js';
 import { describeConvention } from '../naming/convention.js';
 import type { NameCandidate, Suggestion } from '../core/types.js';
+import { resolveLanguage, type Lang } from '../i18n/lang.js';
+import { translateMessage } from '../i18n/ja.js';
 
 const pct = (n: number | undefined) => (n === undefined ? '' : `${Math.round(n * 100)}%`);
 
@@ -22,21 +24,27 @@ function diffHtml(d: FileDiff): string {
   return `<div class="diff">${rows.join('')}</div>`;
 }
 
-function candidatesHtml(c: NameCandidate[] | undefined): string {
+function candidatesTable(c: NameCandidate[] | undefined, L: (s: string) => string): string {
   if (!c?.length) return '';
-  return `<table class="cands"><tr><th>candidate</th><th>score</th><th>evidence</th></tr>${c
-    .map((x) => `<tr class="${x.usable ? '' : 'rej'}"><td><code>${e(x.name)}</code>${x.usable ? '' : ` <small>(${e(x.rejectedReason ?? 'unusable')})</small>`}</td><td>${confBar(x.confidence)}</td><td><small>${x.evidence.map(e).join('<br>')}</small></td></tr>`)
+  return `<table class="cands"><tr><th>${L('candidate')}</th><th>${L('score')}</th><th>${L('evidence')}</th></tr>${c
+    .map((x) => `<tr class="${x.usable ? '' : 'rej'}"><td><code>${e(x.name)}</code>${x.usable ? '' : ` <small>(${e(L(x.rejectedReason ?? 'unusable'))})</small>`}</td><td>${confBar(x.confidence)}</td><td><small>${x.evidence.map((v) => e(L(v))).join('<br>')}</small></td></tr>`)
     .join('')}</table>`;
 }
 
-function sugList(items: Suggestion[], empty: string): string {
-  if (!items.length) return `<p class="muted">${e(empty)}</p>`;
+function suggestionList(items: Suggestion[], empty: string, L: (s: string) => string): string {
+  if (!items.length) return `<p class="muted">${e(L(empty))}</p>`;
   return `<ul class="list">${items
-    .map((s) => `<li><code>${e(s.file)}${s.loc ? ':' + s.loc.line : ''}</code> ${e(s.message)} ${confBar(s.confidence)}</li>`)
+    .map((s) => `<li><code>${e(s.file)}${s.loc ? ':' + s.loc.line : ''}</code> ${e(L(s.message))} ${confBar(s.confidence)}</li>`)
     .join('')}</ul>`;
 }
 
-export function renderReportHtml(r: RefineResult): string {
+const statusBadge = (st: string, L: (s: string) => string) => `<span class="badge ${st === 'passed' ? 'ok' : st === 'failed' || st === 'rolled-back' ? 'bad' : 'muted'}">${e(L(st))}</span>`;
+
+export function renderReportHtml(r: RefineResult, langOverride?: Lang): string {
+  const lang: Lang = langOverride ?? resolveLanguage(r.config.language);
+  const L = (s: string) => translateMessage(s, lang);
+  const candidatesHtml = (c: NameCandidate[] | undefined) => candidatesTable(c, L);
+  const sugList = (items: Suggestion[], empty: string) => suggestionList(items, empty, L);
   const s = r.stats;
   const renames = r.suggestions.filter((x) => x.kind === 'rename');
   const applied = renames.filter((x) => x.details?.applied === true);
@@ -84,76 +92,80 @@ details{background:var(--card);border:1px solid var(--line);border-radius:8px;ma
 .cands .rej{opacity:.55}.tree{white-space:pre;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
 @media (max-width:600px){main{padding:16px 12px}.cards{grid-template-columns:repeat(2,1fr)}}`;
 
-  const statusBadge = (st: string) => `<span class="badge ${st === 'passed' ? 'ok' : st === 'failed' || st === 'rolled-back' ? 'bad' : 'muted'}">${e(st)}</span>`;
+  const T = (en: string, ja: string) => (lang === 'ja' ? ja : en);
+  const msg = (m: string) => e(L(m));
+  const th = (k: string) => `<th>${e(L(k))}</th>`;
+  const exampleCount = (n: number, one: string, many: string) => (lang === 'ja' ? `${n} 件` : `${n} ${n === 1 ? one : many}`);
+  const conv = describeConvention(r.analysis.convention).map((x) => e(lang === 'ja' ? x.replace('casing:', '表記:').replace('collections:', 'コレクション:').replace('booleans:', '真偽値:').replace('no clear rule', '明確な規則なし').replace('no clear prefix', '明確な接頭辞なし').replace('plural noun', '複数形の名詞') : x)).join(' · ');
 
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CodeRefiner report – ${e(r.project.name)}</title><style>${css}</style></head><body><main>
-<h1>CodeRefiner report</h1>
-<p class="muted">${e(r.project.name)} · mode <b>${e(r.config.mode)}</b> · AI advisor ${r.aiUsed ? 'used' : 'not used'} · Analysis refers to the <i>original</i> files; line numbers are original lines.</p>
+<html lang="${lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${e(L('CodeRefiner report'))} – ${e(r.project.name)}</title><style>${css}</style></head><body><main>
+<h1>${e(L('CodeRefiner report'))}</h1>
+<p class="muted">${e(r.project.name)} · ${T('mode', 'モード')} <b>${e(r.config.mode)}</b> · ${T(`AI advisor ${r.aiUsed ? 'used' : 'not used'}`, `AI Advisor ${r.aiUsed ? '使用' : '未使用'}`)} · ${T('Analysis refers to the <i>original</i> files; line numbers are original lines.', '解析結果は<i>元の</i>ファイルが対象で、行番号は元の行番号です。')}</p>
 
 <div class="cards">
- <div class="card"><b>${s.processedFiles}</b><span>files processed (of ${s.totalFiles})</span></div>
- <div class="card"><b>${s.changedFiles}</b><span>files changed</span></div>
- <div class="card"><b>${s.renames}</b><span>names changed</span></div>
- <div class="card"><b>${s.refactorings}</b><span>refactorings</span></div>
- <div class="card"><b class="${s.warnings ? 'warn' : ''}">${s.warnings}</b><span>warnings</span></div>
- <div class="card"><b>+${s.linesAdded} / −${s.linesRemoved}</b><span>lines</span></div>
+ <div class="card"><b>${s.processedFiles}</b><span>${T(`files processed (of ${s.totalFiles})`, `処理したファイル (全 ${s.totalFiles} 件中)`)}</span></div>
+ <div class="card"><b>${s.changedFiles}</b><span>${e(L('files changed'))}</span></div>
+ <div class="card"><b>${s.renames}</b><span>${e(L('names changed'))}</span></div>
+ <div class="card"><b>${s.refactorings}</b><span>${e(L('refactorings'))}</span></div>
+ <div class="card"><b class="${s.warnings ? 'warn' : ''}">${s.warnings}</b><span>${e(L('warnings'))}</span></div>
+ <div class="card"><b>+${s.linesAdded} / −${s.linesRemoved}</b><span>${e(L('lines'))}</span></div>
 </div>
 
-<h2>Project</h2>
-<table><tr><th>runtime</th><td>${e(r.metadata.runtime)}</td></tr>
-<tr><th>languages</th><td>${e(r.metadata.languages.join(', ') || '–')}</td></tr>
-<tr><th>frameworks</th><td>${e(r.metadata.frameworks.join(', ') || '–')}</td></tr>
-<tr><th>build tools</th><td>${e(r.metadata.buildTools.join(', ') || '–')}</td></tr>
-<tr><th>entry points</th><td>${r.metadata.entryPoints.map((x) => `<code>${e(x)}</code>`).join(' ') || '–'}</td></tr>
-${r.metadata.unsupportedLanguages.length ? `<tr><th>no Language Pack</th><td>${e(r.metadata.unsupportedLanguages.join(', '))} (copied unchanged)</td></tr>` : ''}</table>
+<h2>${e(L('Project'))}</h2>
+<table><tr>${th('runtime')}<td>${e(r.metadata.runtime)}</td></tr>
+<tr>${th('languages')}<td>${e(r.metadata.languages.join(', ') || '–')}</td></tr>
+<tr>${th('frameworks')}<td>${e(r.metadata.frameworks.join(', ') || '–')}</td></tr>
+<tr>${th('build tools')}<td>${e(r.metadata.buildTools.join(', ') || '–')}</td></tr>
+<tr>${th('entry points')}<td>${r.metadata.entryPoints.map((x) => `<code>${e(x)}</code>`).join(' ') || '–'}</td></tr>
+${r.metadata.unsupportedLanguages.length ? `<tr>${th('no Language Pack')}<td>${e(r.metadata.unsupportedLanguages.join(', '))} ${T('(copied unchanged)', '(そのままコピー)')}</td></tr>` : ''}</table>
 
-<h2>Validation</h2>
-<table>${r.validation.checks.map((c) => `<tr><td>${e(c.name)}${c.file ? ` <code>${e(c.file)}</code>` : ''}</td><td>${statusBadge(c.status)}</td><td class="muted">${e(c.detail ?? '')}</td></tr>`).join('')}</table>
-${r.validation.rolledBack.length ? `<p class="bad">Rolled back to the original: ${r.validation.rolledBack.map((p) => `<code>${e(p)}</code>`).join(', ')}</p>` : ''}
+<h2>${e(L('Validation'))}</h2>
+<table>${r.validation.checks.map((c) => `<tr><td>${e(L(c.name))}${c.file ? ` <code>${e(c.file)}</code>` : ''}</td><td>${statusBadge(c.status, L)}</td><td class="muted">${msg(c.detail ?? '')}</td></tr>`).join('')}</table>
+${r.validation.rolledBack.length ? `<p class="bad">${T('Rolled back to the original', '元に戻したファイル')}: ${r.validation.rolledBack.map((p) => `<code>${e(p)}</code>`).join(', ')}</p>` : ''}
 
-<h2>Warnings (${r.warnings.length})</h2>
-${r.warnings.length ? `<ul class="list">${r.warnings.map((w) => `<li><span class="badge">${e(w.code)}</span> ${w.file ? `<code>${e(w.file)}</code> ` : ''}${e(w.message)}</li>`).join('')}</ul>` : '<p class="muted">None.</p>'}
+<h2>${T('Warnings', '警告')} (${r.warnings.length})</h2>
+${r.warnings.length ? `<ul class="list">${r.warnings.map((w) => `<li><span class="badge">${e(w.code)}</span> ${w.file ? `<code>${e(w.file)}</code> ` : ''}${msg(w.message)}</li>`).join('')}</ul>` : `<p class="muted">${e(L('None.'))}</p>`}
 
-<h2>Changes by file (${r.changes.length})</h2>
-${[...byFile.entries()].map(([file, cs]) => `<details><summary><code>${e(file)}</code> <span class="muted">– ${cs.length} change${cs.length > 1 ? 's' : ''}</span></summary>
-<ul class="list">${cs.map((c) => `<li><span class="badge">${e(c.level)}</span> <b>${e(c.ruleId)}</b>: ${e(c.description)}${c.loc ? ` <small class="muted">(line ${c.loc.line})</small>` : ''} ${c.kind === 'rename' ? confBar(c.confidence) : ''}</li>`).join('')}</ul>
-${diffByPath.has(file) ? diffHtml(diffByPath.get(file)!) : ''}</details>`).join('') || '<p class="muted">No files were changed.</p>'}
+<h2>${T('Changes by file', 'ファイルごとの変更')} (${r.changes.length})</h2>
+${[...byFile.entries()].map(([file, cs]) => `<details><summary><code>${e(file)}</code> <span class="muted">– ${exampleCount(cs.length, 'change', 'changes')}</span></summary>
+<ul class="list">${cs.map((c) => `<li><span class="badge">${e(L(c.level))}</span> <b>${e(c.ruleId)}</b>: ${msg(c.description)}${c.loc ? ` <small class="muted">(${T('line', '行')} ${c.loc.line})</small>` : ''} ${c.kind === 'rename' ? confBar(c.confidence) : ''}</li>`).join('')}</ul>
+${diffByPath.has(file) ? diffHtml(diffByPath.get(file)!) : ''}</details>`).join('') || `<p class="muted">${e(L('No files were changed.'))}</p>`}
 
-<h2>Naming</h2>
-<p class="muted">Project convention: ${describeConvention(r.analysis.convention).map(e).join(' · ')}. Confidence thresholds: auto ≥ ${pct(r.config.thresholds.autoApply)}, recommended ≥ ${pct(r.config.thresholds.recommend)}, candidate ≥ ${pct(r.config.thresholds.suggest)}.</p>
-<h3>Applied (${applied.length})</h3>
-${applied.length ? applied.map((x) => `<details><summary><code>${e(x.file)}:${x.loc?.line ?? ''}</code> ${e(x.message)} ${confBar(x.confidence)}</summary>${candidatesHtml(x.candidates)}</details>`).join('') : '<p class="muted">No names were changed.</p>'}
-<h3>Candidates – not applied (${pending.length})</h3>
-${pending.length ? pending.map((x) => `<details><summary><code>${e(x.file)}:${x.loc?.line ?? ''}</code> ${e(x.message)} ${confBar(x.confidence)}</summary>${candidatesHtml(x.candidates)}</details>`).join('') : '<p class="muted">No candidates.</p>'}
-${r.analysis.abbreviations.length ? `<h3>Abbreviations seen in the project</h3><p>${r.analysis.abbreviations.slice(0, 20).map((a) => `<code>${e(a.abbreviation)}</code> → <code>${e(a.expansion)}</code>`).join(' · ')}</p>` : ''}
-${Object.keys(r.analysis.variantGroups).length ? `<h3>Spelling variants</h3><ul class="list">${Object.entries(r.analysis.variantGroups).slice(0, 15).map(([k, v]) => `<li><b>${e(k)}</b>: ${v.map((x) => `<code>${e(x)}</code>`).join(' ')}</li>`).join('')}</ul>` : ''}
+<h2>${e(L('Naming'))}</h2>
+<p class="muted">${T('Project convention', 'プロジェクトの命名規則')}: ${conv}. ${T('Confidence thresholds', '確信度のしきい値')}: ${T('auto', '自動適用')} ≥ ${pct(r.config.thresholds.autoApply)}, ${T('recommended', '推奨')} ≥ ${pct(r.config.thresholds.recommend)}, ${T('candidate', '候補表示')} ≥ ${pct(r.config.thresholds.suggest)}.</p>
+<h3>${T('Applied', '適用した変更')} (${applied.length})</h3>
+${applied.length ? applied.map((x) => `<details><summary><code>${e(x.file)}:${x.loc?.line ?? ''}</code> ${msg(x.message)} ${confBar(x.confidence)}</summary>${candidatesHtml(x.candidates)}</details>`).join('') : `<p class="muted">${e(L('No names were changed.'))}</p>`}
+<h3>${T('Candidates – not applied', '候補 (未適用)')} (${pending.length})</h3>
+${pending.length ? pending.map((x) => `<details><summary><code>${e(x.file)}:${x.loc?.line ?? ''}</code> ${msg(x.message)} ${confBar(x.confidence)}</summary>${candidatesHtml(x.candidates)}</details>`).join('') : `<p class="muted">${e(L('No candidates.'))}</p>`}
+${r.analysis.abbreviations.length ? `<h3>${e(L('Abbreviations seen in the project'))}</h3><p>${r.analysis.abbreviations.slice(0, 20).map((a) => `<code>${e(a.abbreviation)}</code> → <code>${e(a.expansion)}</code>`).join(' · ')}</p>` : ''}
+${Object.keys(r.analysis.variantGroups).length ? `<h3>${e(L('Spelling variants'))}</h3><ul class="list">${Object.entries(r.analysis.variantGroups).slice(0, 15).map(([k, v]) => `<li><b>${e(k)}</b>: ${v.map((x) => `<code>${e(x)}</code>`).join(' ')}</li>`).join('')}</ul>` : ''}
 
-<h2>Removal candidates (${dead.length})</h2>
-<p class="muted">Nothing is deleted unless <code>removeUnused</code> is on. These are reports only.</p>
+<h2>${T('Removal candidates', '削除候補')} (${dead.length})</h2>
+<p class="muted">${T('Nothing is deleted unless <code>removeUnused</code> is on. These are reports only.', '<code>removeUnused</code> を有効にしない限り何も削除しません。ここは報告のみです。')}</p>
 ${sugList(dead, 'No dead code found.')}
 
-<h2>Duplicates (${dup.length})</h2>
+<h2>${T('Duplicates', '重複')} (${dup.length})</h2>
 ${sugList(dup, 'No duplicates found.')}
 
-<h2>Complexity (${cx.length})</h2>
+<h2>${T('Complexity', '複雑度')} (${cx.length})</h2>
 ${sugList(cx, 'Nothing exceeds the configured limits.')}
 
-<h2>HTML ↔ CSS ↔ JavaScript</h2>
+<h2>${e(L('HTML ↔ CSS ↔ JavaScript'))}</h2>
 ${sugList(xref, 'No cross-reference problems found.')}
-${xr.ids.length ? `<details><summary>Elements by id (${xr.ids.length})</summary><table><tr><th>id</th><th>HTML</th><th>CSS</th><th>JS</th><th>events</th></tr>${xr.ids.map((i) => `<tr><td><code>#${e(i.id)}</code></td><td>${i.html.length}</td><td>${i.css.map((c) => `<code>${e(c.selector)}</code>`).join(' ')}</td><td>${i.js.length}</td><td>${i.events.map((ev) => `${e(ev.event)}${ev.handler ? ' → <code>' + e(ev.handler) + '</code>' : ''}`).join('<br>')}</td></tr>`).join('')}</table></details>` : ''}
-${xr.events.length ? `<details><summary>Event wiring (${xr.events.length})</summary><ul class="list">${xr.events.map((ev) => `<li>${ev.target ? `<code>${e(ev.target)}</code> ` : ''}${e(ev.event)}${ev.handler ? ` → <code>${e(ev.handler)}</code>` : ''} <small class="muted">${e(ev.source)} · ${e(ev.file)}:${ev.line}</small></li>`).join('')}</ul></details>` : ''}
+${xr.ids.length ? `<details><summary>${T('Elements by id', 'id ごとの要素')} (${xr.ids.length})</summary><table><tr><th>id</th><th>HTML</th><th>CSS</th><th>JS</th>${th('events')}</tr>${xr.ids.map((i) => `<tr><td><code>#${e(i.id)}</code></td><td>${i.html.length}</td><td>${i.css.map((c) => `<code>${e(c.selector)}</code>`).join(' ')}</td><td>${i.js.length}</td><td>${i.events.map((ev) => `${e(ev.event)}${ev.handler ? ' → <code>' + e(ev.handler) + '</code>' : ''}`).join('<br>')}</td></tr>`).join('')}</table></details>` : ''}
+${xr.events.length ? `<details><summary>${T('Event wiring', 'イベントの結び付き')} (${xr.events.length})</summary><ul class="list">${xr.events.map((ev) => `<li>${ev.target ? `<code>${e(ev.target)}</code> ` : ''}${e(ev.event)}${ev.handler ? ` → <code>${e(ev.handler)}</code>` : ''} <small class="muted">${e(ev.source)} · ${e(ev.file)}:${ev.line}</small></li>`).join('')}</ul></details>` : ''}
 
-<h2>Structure</h2>
-${r.analysis.modules.length ? `<details><summary>Modules (${r.analysis.modules.length})</summary><table><tr><th>file</th><th>imports</th><th>exports</th></tr>${r.analysis.modules.map((m) => `<tr><td><code>${e(m.file)}</code></td><td>${m.imports.map((i) => `<code>${e(i.source)}</code>`).join(' ')}</td><td>${m.exports.map((x) => `<code>${e(x)}</code>`).join(' ')}</td></tr>`).join('')}</table></details>` : ''}
-${r.analysis.dataFlow.length ? `<details><summary>Data flow (${r.analysis.dataFlow.length})</summary><p class="muted">source → transform → result</p><ul class="list">${r.analysis.dataFlow.slice(0, 150).map((d) => `<li><code>${e(d.from.split('::')[1]?.split('@')[0] ?? d.from)}</code> —${e(d.via)}→ <code>${e(d.to.split('::')[1]?.split('@')[0] ?? d.to)}</code> <small class="muted">${e(d.file)}</small></li>`).join('')}</ul></details>` : ''}
-${r.analysis.cycles.length ? `<p class="warn">Circular dependencies: ${r.analysis.cycles.map((c) => c.map((x) => `<code>${e(x)}</code>`).join(' ↔ ')).join('; ')}</p>` : '<p class="muted">No circular dependencies.</p>'}
-<details><summary>Dependencies (${r.analysis.dependencies.length})</summary><ul class="list">${r.analysis.dependencies.map((d) => `<li><code>${e(d.from)}</code> → <code>${e(d.to)}</code> <small class="muted">${e(d.kind)}</small></li>`).join('')}</ul></details>
-${callTrees.length ? `<details><summary>Call graph</summary>${callTrees.map((t) => `<div class="tree">${e(t)}</div>`).join('')}</details>` : ''}
-<details><summary>Project vocabulary</summary><p>${r.analysis.vocabulary.slice(0, 40).map((v) => `<code>${e(v.word)}</code> ×${v.count}`).join(' · ')}</p></details>
+<h2>${e(L('Structure'))}</h2>
+${r.analysis.modules.length ? `<details><summary>${T('Modules', 'モジュール')} (${r.analysis.modules.length})</summary><table><tr>${th('file')}${th('imports')}${th('exports')}</tr>${r.analysis.modules.map((m) => `<tr><td><code>${e(m.file)}</code></td><td>${m.imports.map((i) => `<code>${e(i.source)}</code>`).join(' ')}</td><td>${m.exports.map((x) => `<code>${e(x)}</code>`).join(' ')}</td></tr>`).join('')}</table></details>` : ''}
+${r.analysis.dataFlow.length ? `<details><summary>${T('Data flow', 'データフロー')} (${r.analysis.dataFlow.length})</summary><p class="muted">${e(L('source → transform → result'))}</p><ul class="list">${r.analysis.dataFlow.slice(0, 150).map((d) => `<li><code>${e(d.from.split('::')[1]?.split('@')[0] ?? d.from)}</code> —${e(d.via)}→ <code>${e(d.to.split('::')[1]?.split('@')[0] ?? d.to)}</code> <small class="muted">${e(d.file)}</small></li>`).join('')}</ul></details>` : ''}
+${r.analysis.cycles.length ? `<p class="warn">${T('Circular dependencies', '循環依存')}: ${r.analysis.cycles.map((c) => c.map((x) => `<code>${e(x)}</code>`).join(' ↔ ')).join('; ')}</p>` : `<p class="muted">${e(L('No circular dependencies.'))}</p>`}
+<details><summary>${T('Dependencies', '依存関係')} (${r.analysis.dependencies.length})</summary><ul class="list">${r.analysis.dependencies.map((d) => `<li><code>${e(d.from)}</code> → <code>${e(d.to)}</code> <small class="muted">${e(d.kind)}</small></li>`).join('')}</ul></details>
+${callTrees.length ? `<details><summary>${e(L('Call graph'))}</summary>${callTrees.map((t) => `<div class="tree">${e(t)}</div>`).join('')}</details>` : ''}
+<details><summary>${e(L('Project vocabulary'))}</summary><p>${r.analysis.vocabulary.slice(0, 40).map((v) => `<code>${e(v.word)}</code> ×${v.count}`).join(' · ')}</p></details>
 
-<h2>Files</h2>
-<details><summary>All files (${r.files.length})</summary><table><tr><th>path</th><th>status</th><th>note</th></tr>${r.files.map((f) => `<tr><td><code>${e(f.path)}</code></td><td>${e(f.status)}</td><td class="muted">${e(f.note ?? '')}</td></tr>`).join('')}</table></details>
+<h2>${e(L('Files'))}</h2>
+<details><summary>${T('All files', 'すべてのファイル')} (${r.files.length})</summary><table><tr>${th('path')}${th('status')}${th('note')}</tr>${r.files.map((f) => `<tr><td><code>${e(f.path)}</code></td><td>${e(L(f.status))}</td><td class="muted">${msg(f.note ?? '')}</td></tr>`).join('')}</table></details>
 </main></body></html>`;
 }

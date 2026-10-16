@@ -10,6 +10,7 @@ export interface NamingWeights {
   vocabularyMatch: number;
   contextMatch: number;
   nameHint: number;
+  poorName: number;
   abbreviation: number;
   ambiguousName: number;
   collision: number;
@@ -62,13 +63,26 @@ export interface Config {
     runCommands: boolean;
     commandTimeoutMs: number;
   };
+  /**
+   * AI Advisor backend. Empty `model` / `baseUrl` / `apiKeyEnv` use the provider's defaults:
+   * anthropic (ANTHROPIC_API_KEY), openai (OPENAI_API_KEY), gemini (GEMINI_API_KEY),
+   * local = any OpenAI-compatible server such as Ollama or LM Studio (no key needed).
+   */
   ai: {
-    provider: 'anthropic';
+    provider: 'anthropic' | 'openai' | 'gemini' | 'local';
     model: string;
     apiKeyEnv: string;
     baseUrl: string;
     timeoutMs: number;
   };
+  /**
+   * Top-level names of classic (non-module) scripts are globals that other code may use.
+   * `never`: never rename them. `unreferenced`: rename those that no other file, inline handler or
+   * `window.x` access mentions. `auto` (default): `unreferenced` in aggressive mode, `never` otherwise.
+   */
+  renameGlobals: 'auto' | 'never' | 'unreferenced';
+  /** Language of the report and messages. `auto` follows the environment. */
+  language: 'auto' | 'en' | 'ja';
   /** Paths/modules of external Language Packs to load. */
   languagePacks: string[];
 }
@@ -91,7 +105,8 @@ export const DEFAULT_CONFIG: Config = {
     vocabularyMatch: 5,
     contextMatch: 5,
     nameHint: 15,
-    abbreviation: 45,
+    poorName: 5,
+    abbreviation: 50,
     ambiguousName: -30,
     collision: -20,
     contextMismatch: -20,
@@ -102,13 +117,9 @@ export const DEFAULT_CONFIG: Config = {
   include: [],
   maxFileSizeBytes: 2 * 1024 * 1024,
   validationOptions: { typecheck: true, runCommands: false, commandTimeoutMs: 120_000 },
-  ai: {
-    provider: 'anthropic',
-    model: 'claude-haiku-5-5',
-    apiKeyEnv: 'ANTHROPIC_API_KEY',
-    baseUrl: 'https://api.anthropic.com',
-    timeoutMs: 30_000,
-  },
+  ai: { provider: 'anthropic', model: '', apiKeyEnv: '', baseUrl: '', timeoutMs: 30_000 },
+  renameGlobals: 'auto',
+  language: 'auto',
   languagePacks: [],
 };
 
@@ -138,6 +149,11 @@ export function validateConfig(c: Config): Config {
   if (!(t.suggest <= t.recommend && t.recommend <= t.autoApply && t.autoApply <= 1 && t.suggest >= 0)) {
     throw new ConfigError('thresholds must satisfy 0 <= suggest <= recommend <= autoApply <= 1');
   }
+  if (!['anthropic', 'openai', 'gemini', 'local'].includes(c.ai.provider)) {
+    throw new ConfigError(`ai.provider must be anthropic | openai | gemini | local (got "${c.ai.provider}")`);
+  }
+  if (!['auto', 'never', 'unreferenced'].includes(c.renameGlobals)) throw new ConfigError('renameGlobals must be auto | never | unreferenced');
+  if (!['auto', 'en', 'ja'].includes(c.language)) throw new ConfigError('language must be auto | en | ja');
   for (const key of ['ignore', 'omit', 'include', 'languagePacks'] as const) {
     if (!Array.isArray(c[key]) || c[key].some((x) => typeof x !== 'string')) {
       throw new ConfigError(`${key} must be an array of strings`);

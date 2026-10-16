@@ -7,7 +7,14 @@ import { resolveConfig, type Config } from '../core/config.js';
 import { scanZipBuffer } from '../core/scanner.js';
 import { refineProject } from '../pipeline.js';
 import { writeOutputs } from '../node.js';
-import { UI_HTML } from './page.js';
+import { CLIENT_FILES, UI_HTML } from './page.js';
+import { createAdvisor } from '../ai/anthropic.js';
+import { AI_PROVIDERS } from '../ai/providers.js';
+import { readFile } from 'node:fs/promises';
+import { resolveLanguage } from '../i18n/lang.js';
+import { translateMessage } from '../i18n/ja.js';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export interface UiOptions {
   port?: number;
@@ -59,6 +66,13 @@ export async function startUi(opts: UiOptions): Promise<{ server: Server; url: s
 
       if (req.method === 'GET' && url.pathname === '/') return send(res, 200, UI_HTML, 'text/html; charset=utf-8');
 
+      if (req.method === 'GET' && url.pathname.startsWith('/ui/')) {
+        const file = url.pathname.slice('/ui/'.length);
+        if (!CLIENT_FILES.includes(file)) return send(res, 404, { error: 'Not found' });
+        const code = await readFile(join(dirname(fileURLToPath(import.meta.url)), file), 'utf8');
+        return send(res, 200, code, 'text/javascript; charset=utf-8');
+      }
+
       if (req.method === 'GET' && url.pathname.startsWith('/out/')) {
         const [, , id, file] = url.pathname.split('/');
         const run = runs.get(id);
@@ -79,14 +93,26 @@ export async function startUi(opts: UiOptions): Promise<{ server: Server; url: s
           const body = await readBody(req, opts.maxUploadBytes ?? MAX_UPLOAD);
           const mode = url.searchParams.get('mode') ?? 'safe';
           const name = (url.searchParams.get('name') || 'project').replace(/[^\w.-]+/g, '_').slice(0, 60) || 'project';
-          const config = resolveConfig({ ...opts.baseConfig, mode, aiAdvisor: url.searchParams.get('ai') === '1' || opts.baseConfig?.aiAdvisor });
+          const providerParam = url.searchParams.get('provider') ?? opts.baseConfig?.ai?.provider ?? 'anthropic';
+          if (!AI_PROVIDERS.includes(providerParam as never)) return send(res, 400, { error: `Unknown AI provider: ${providerParam}` });
+          const wantsAi = url.searchParams.get('ai') === '1' || !!opts.baseConfig?.aiAdvisor;
+          const config = resolveConfig({
+            ...opts.baseConfig,
+            mode,
+            aiAdvisor: wantsAi,
+            removeUnused: url.searchParams.get('removeUnused') === '1' || opts.baseConfig?.removeUnused,
+            language: (['en', 'ja'].includes(url.searchParams.get('lang') ?? '') ? url.searchParams.get('lang') : opts.baseConfig?.language) as never,
+            ai: { ...(opts.baseConfig?.ai as object), provider: providerParam, model: url.searchParams.get('model') ?? opts.baseConfig?.ai?.model ?? '', baseUrl: url.searchParams.get('baseUrl') ?? opts.baseConfig?.ai?.baseUrl ?? '' },
+          });
+          const typedKey = typeof req.headers['x-ai-key'] === 'string' ? (req.headers['x-ai-key'] as string) : undefined;
+          const setup = createAdvisor(config, undefined, { apiKey: typedKey });
           const project = scanZipBuffer(body, name, config);
-          const result = await refineProject(project, config);
+          const result = await refineProject(project, config, { advisor: setup.advisor });
           const id = `${Date.now().toString(36)}${(counter++).toString(36)}`;
           const dir = join(outRoot, `${new Date().toISOString().replace(/[:.]/g, '-')}-${name}`);
           await writeOutputs(result, dir);
           runs.set(id, { dir });
-          const aiNote = config.aiAdvisor && !result.aiUsed ? 'AI Advisor was requested but no API key is configured; local analysis only.' : '';
+          const aiNote = config.aiAdvisor && !result.aiUsed ? translateMessage(setup.warning ?? 'AI Advisor was requested but could not be used.', resolveLanguage(config.language)) : '';
           return send(res, 200, { id, files: result.stats.totalFiles, changed: result.stats.changedFiles, warnings: result.stats.warnings, refinedDir: join(dir, 'refined'), aiNote });
         }
         if (url.pathname === '/api/open') {

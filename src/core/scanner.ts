@@ -1,5 +1,6 @@
 import type { Config } from './config.js';
 import { detectLanguage, isBinary } from './detect.js';
+import { canEncode, decodeBytes, encodeString, type TextEncoding } from './encoding.js';
 import { globToRegExp, matchesAny } from './glob.js';
 import type { Project, ProjectFile } from './types.js';
 import { readZip, stripSingleRoot } from './zip.js';
@@ -52,6 +53,14 @@ export function build(path: string, size: number, data: Buffer | undefined, cls:
   if (data) {
     f.kind = isBinary(path, data) ? 'binary' : 'text';
     if (f.kind === 'binary') f.language = undefined;
+    if (f.kind === 'text' && !f.ignored) {
+      const det = decodeBytes(data);
+      if (!det) {
+        // Undecodable bytes would be corrupted by a round trip through a string: copy them untouched.
+        f.ignored = true;
+        f.ignoreReason = 'unsupported text encoding (not UTF-8 / Shift_JIS / EUC-JP / UTF-16); copied unchanged';
+      } else f.encoding = det.encoding;
+    }
     if (!f.ignored && f.kind === 'text' && size > cfg.maxFileSizeBytes) {
       f.ignored = true;
       f.ignoreReason = `larger than maxFileSizeBytes (${cfg.maxFileSizeBytes})`;
@@ -85,18 +94,17 @@ export function scanZipBuffer(buf: Uint8Array, name: string, cfg: Config): Proje
   return scanEntries(root ?? name, entries, cfg, 'zip');
 }
 
-const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
-
-export function decodeText(f: ProjectFile): { text: string; bom: boolean } {
-  const data = f.data ?? Buffer.alloc(0);
-  const bom = data.length >= 3 && data[0] === 0xef && data[1] === 0xbb && data[2] === 0xbf;
-  return { text: data.toString('utf8', bom ? 3 : 0), bom };
+export function decodeText(f: ProjectFile): { text: string; bom: boolean; encoding: TextEncoding } {
+  const det = decodeBytes(f.data ?? Buffer.alloc(0));
+  if (!det) return { text: '', bom: false, encoding: 'utf-8' };
+  return { text: det.text, bom: det.bom, encoding: det.encoding };
 }
 
-export function encodeText(text: string, bom: boolean): Buffer {
-  const body = Buffer.from(text, 'utf8');
-  return bom ? Buffer.concat([BOM, body]) : body;
+export function encodeText(text: string, bom: boolean, encoding: TextEncoding = 'utf-8'): Buffer {
+  return encodeString(text, encoding, bom);
 }
+
+export { canEncode };
 
 export function copyableFiles(files: ProjectFile[]): { path: string; data: Buffer }[] {
   return files.filter((f) => !f.omitted && f.data).map((f) => ({ path: f.path, data: f.data! }));

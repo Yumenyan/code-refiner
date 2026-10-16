@@ -65,6 +65,8 @@ export function detectLanguage(path: string): string | undefined {
 
 export function isBinary(path: string, data: Buffer): boolean {
   if (BINARY_EXT.has(extname(path))) return true;
+  // UTF-16 text contains NUL bytes by design
+  if (data.length >= 2 && ((data[0] === 0xff && data[1] === 0xfe) || (data[0] === 0xfe && data[1] === 0xff))) return false;
   const len = Math.min(data.length, 8000);
   for (let i = 0; i < len; i++) if (data[i] === 0) return true;
   return false;

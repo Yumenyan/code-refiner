@@ -4,7 +4,8 @@ import { generateSpecs, renderSpec, valueTypeFromRole, type Evidence, type NameS
 import type { NamingConvention } from './convention.js';
 import type { NamingSubject } from './facts.js';
 import type { Vocabulary } from './vocabulary.js';
-import { isAmbiguousName, isValidIdentifier, splitWords } from './words.js';
+import { COMMON_ABBREVIATIONS, isAmbiguousName, isPoorName, isValidIdentifier, splitWords } from './words.js';
+import type { NamingAdvice } from '../ai/advisor.js';
 
 export interface NamingContext {
   vocabulary: Vocabulary;
@@ -63,6 +64,9 @@ export function proposeNames(subject: NamingSubject, ctx: NamingContext): NameCa
       if (words.some((x) => ctx.vocabulary.has(x))) {
         ev.push({ key: 'vocabularyMatch', note: 'uses project vocabulary' });
       }
+      if (isPoorName(subject.name) && !ev.some((x) => x.key === 'nameHint')) {
+        ev.push({ key: 'poorName', note: `"${subject.name}" says nothing about the value` });
+      }
       if (initialsMatch(subject.name, spec.head)) {
         ev.push({ key: 'nameHint', note: `"${subject.name}" abbreviates "${spec.head.join(' ')}"` });
       }
@@ -102,7 +106,7 @@ export function proposeNames(subject: NamingSubject, ctx: NamingContext): NameCa
       rejectedReason = 'collides with an existing identifier';
     }
     const roleType = valueTypeFromRole(s.spec.role);
-    if (roleType && subject.valueType !== 'unknown' && roleType !== subject.valueType && !(roleType === 'element' && subject.valueType === 'object')) {
+    if (subject.kind !== 'function' && roleType && subject.valueType !== 'unknown' && roleType !== subject.valueType && !(roleType === 'element' && subject.valueType === 'object')) {
       score += w.contextMismatch;
       notes.push(`name implies ${roleType} but value is ${subject.valueType} (${w.contextMismatch})`);
     }
@@ -132,8 +136,11 @@ function scoreEvidence(ev: Evidence[], w: NamingWeights): { score: number; notes
 function expandAbbreviations(subject: NamingSubject, ctx: NamingContext): Scored[] {
   const words = splitWords(subject.name);
   const out: Scored[] = [];
-  if (!words.length || ctx.vocabulary.abbreviations.length === 0) return out;
-  const hints = new Map(ctx.vocabulary.abbreviations.map((a) => [a.abbreviation, a]));
+  if (!words.length) return out;
+  const hints = new Map<string, { abbreviation: string; expansion: string }>();
+  for (const [abbr, expansion] of Object.entries(COMMON_ABBREVIATIONS)) if (words.includes(abbr)) hints.set(abbr, { abbreviation: abbr, expansion });
+  // the project's own spelling wins over the generic dictionary
+  for (const a of ctx.vocabulary.abbreviations) hints.set(a.abbreviation, a);
   let changed = false;
   const expanded = words.map((wd) => {
     const h = hints.get(wd);
@@ -183,4 +190,29 @@ export function applyAdvice(
     }
   }
   return out.sort((a, b) => b.score - a.score || (a.name < b.name ? -1 : 1));
+}
+
+/**
+ * Turns a model-proposed name into a candidate, after the same local checks every candidate gets.
+ * Its confidence is capped just above "recommended", so SAFE mode never applies it and
+ * CAUTIOUS / AGGRESSIVE modes only apply it when no better, locally justified candidate exists.
+ */
+export function withProposal(candidates: NameCandidate[], advice: NamingAdvice | null, subject: NamingSubject, t: Thresholds, w: NamingWeights): NameCandidate[] {
+  const name = advice?.proposal;
+  if (!name || name === subject.name || candidates.some((c) => c.name === name)) return candidates;
+  const evidence = [`AI proposal${advice?.rationale ? ': ' + advice.rationale : ''}`, 'passed local checks (valid identifier, no collision)'];
+  let usable = isValidIdentifier(name);
+  let rejectedReason: string | undefined = usable ? undefined : 'not a valid identifier';
+  if (subject.takenNames.has(name)) {
+    usable = false;
+    rejectedReason = 'collides with an existing identifier';
+  }
+  if (isAmbiguousName(name)) {
+    usable = false;
+    rejectedReason = 'ambiguous name';
+  }
+  const score = Math.min(Math.round(t.recommend * 100) + 2, Math.round(t.autoApply * 100) - 1);
+  void w;
+  const cand: NameCandidate = { name, score, confidence: score / 100, evidence, usable, rejectedReason };
+  return [...candidates, cand].sort((a, b) => b.score - a.score || (a.name < b.name ? -1 : 1));
 }

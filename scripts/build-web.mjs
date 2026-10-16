@@ -44,7 +44,10 @@ await build({
   define: { 'process.env.NODE_ENV': '"production"', global: 'globalThis' },
 });
 
-await cp(join(root, 'src/web/index.html'), join(out, 'index.html'));
+// The page markup is shared with the local UI: bundle it once, then render the static HTML.
+const markup = await build({ entryPoints: [join(root, 'src/ui/markup.ts')], bundle: true, format: 'esm', platform: 'neutral', write: false, logLevel: 'silent' });
+const { renderPageHtml } = await import(`data:text/javascript;base64,${Buffer.from(markup.outputFiles[0].text).toString('base64')}`);
+await writeFile(join(out, 'index.html'), renderPageHtml('web', '<script type="module" src="main.js"></script>'));
 await writeFile(join(out, '.nojekyll'), '');
 
 const wasmDir = join(dirname(require.resolve('tree-sitter-wasms/package.json')), 'out');

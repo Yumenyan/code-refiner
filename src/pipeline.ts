@@ -7,12 +7,14 @@ import { detectDuplicates } from './analysis/duplicates.js';
 import { resolveConfig, type Config } from './core/config.js';
 import { diffFile, type FileDiff } from './core/diff.js';
 import { detectMetadata } from './core/metadata.js';
-import { copyableFiles, decodeText, encodeText } from './core/scanner.js';
+import { canEncode, copyableFiles, decodeText, encodeText } from './core/scanner.js';
+import type { TextEncoding } from './core/encoding.js';
 import type { Change, Project, ProjectFile, ProjectMetadata, Suggestion, Warning } from './core/types.js';
 import { createRegistry, type LanguageRegistry, type LanguagePack } from './languages/index.js';
 import type { ProjectContext, RefineOutput } from './languages/types.js';
 import { classifyConfidence, namingContextFrom } from './naming/engine.js';
-import { detectConvention, type NamingConvention } from './naming/convention.js';
+import { describeConvention, detectConvention, type NamingConvention } from './naming/convention.js';
+import { resolveLanguage } from './i18n/lang.js';
 import { VocabularyBuilder, type Vocabulary } from './naming/vocabulary.js';
 import type { FileModels } from './semantic/model.js';
 import { buildProjectModel, type ProjectModel } from './semantic/project.js';
@@ -150,13 +152,15 @@ export async function refineProject(project: Project, configInput: Partial<Confi
   // ---- Phase 1: inventory ------------------------------------------------------------------
   const texts = new Map<string, string>();
   const boms = new Map<string, boolean>();
+  const encodings = new Map<string, TextEncoding>();
   const analyzable: ProjectFile[] = [];
   for (const f of project.files) {
     if (f.omitted || !f.data || f.ignored || f.kind === 'binary') continue;
     const pack = registry.forFile(f.path);
-    const { text, bom } = decoder(f);
+    const { text, bom, encoding } = decoder(f);
     texts.set(f.path, text);
     boms.set(f.path, bom);
+    encodings.set(f.path, encoding);
     if (pack) analyzable.push(f);
   }
   const textOf = (p: string) => texts.get(p) ?? (() => {
@@ -208,10 +212,31 @@ export async function refineProject(project: Project, configInput: Partial<Confi
   const convention = detectConvention(samples.filter((s) => s.name.length > 2));
   const naming = namingContextFrom(config, vocabulary, convention);
 
+  const nameFiles = new Map<string, Set<string>>();
+  for (const [file, m] of models) {
+    for (const id of Object.keys(m.semantic?.identifierCounts ?? {})) {
+      let set = nameFiles.get(id);
+      if (!set) nameFiles.set(id, (set = new Set()));
+      set.add(file);
+    }
+  }
+  const dynamicGlobals = [...texts.values()].some((t) => /\b(?:window|globalThis|self)\s*\[/.test(t));
+  const globalPolicy: 'never' | 'unreferenced' =
+    !dynamicGlobals && (config.renameGlobals === 'unreferenced' || (config.renameGlobals === 'auto' && config.mode === 'aggressive')) ? 'unreferenced' : 'never';
+  const language = resolveLanguage(config.language, options.env);
   const project_: ProjectContext = {
     naming,
     protectedNames: new Set(crossRef.protectedNames),
     advisor,
+    globalPolicy,
+    language,
+    conventionNote: describeConvention(convention).join('; '),
+    usedElsewhere: (name, file) => {
+      const set = nameFiles.get(name);
+      if (!set) return false;
+      for (const f of set) if (f !== file) return true;
+      return false;
+    },
   };
   project_.refineEmbedded = async (language, source, opts) => {
     const pack = registry.get(language);
@@ -249,6 +274,9 @@ export async function refineProject(project: Project, configInput: Partial<Confi
     try {
       out = await pack.refine({ file: f.path, source, config, project: project_ });
       out.code = matchLineEndings(source, out.code);
+      if (!canEncode(out.code, encodings.get(f.path) ?? 'utf-8')) {
+        out = { code: source, changes: [], suggestions: [], warnings: [{ code: 'encoding', file: f.path, message: `Result cannot be written back in the file's ${encodings.get(f.path)} encoding; left unchanged` }] };
+      }
     } catch (e) {
       warnings.push({ code: 'refine-failed', file: f.path, message: (e as Error).message });
       out = { code: source, changes: [], suggestions: [], warnings: [] };
@@ -263,6 +291,7 @@ export async function refineProject(project: Project, configInput: Partial<Confi
       original: source,
       refined: out.code,
       semanticRules: [...new Set(out.changes.filter((c) => c.kind !== 'format').map((c) => c.ruleId))],
+      surfaceExempt: out.surfaceChanges,
     });
     log(`${out.code === source ? 'ok     ' : 'changed'} ${f.path}`);
   }
@@ -283,7 +312,7 @@ export async function refineProject(project: Project, configInput: Partial<Confi
         .filter((f) => !f.omitted && f.data)
         .map((f) => {
           const st = useRefined ? states.find((s) => s.path === f.path) : undefined;
-          return { path: f.path, data: st ? encodeText(st.refined, boms.get(f.path) ?? false) : f.data! };
+          return { path: f.path, data: st ? encodeText(st.refined, boms.get(f.path) ?? false, encodings.get(f.path)) : f.data! };
         });
     const checks = await runCommandChecks(metadata.validationCommands, toFiles(false), toFiles(true), {
       timeoutMs: config.validationOptions.commandTimeoutMs,
@@ -314,7 +343,7 @@ export async function refineProject(project: Project, configInput: Partial<Confi
   for (const f of copyableFiles(project.files)) refined.set(f.path, f.data);
   const rolled = new Set(validation.rolledBack);
   for (const s of states) {
-    if (s.refined !== s.original) refined.set(s.path, encodeText(s.refined, boms.get(s.path) ?? false));
+    if (s.refined !== s.original) refined.set(s.path, encodeText(s.refined, boms.get(s.path) ?? false, encodings.get(s.path)));
     const out = outputs.get(s.path)!;
     const kept = s.refined !== s.original;
     fileResults.set(s.path, {

@@ -5,14 +5,43 @@
   "refactorDuplicates": false,
   "aiAdvisor": false,
   "validation": true,
-
-  "thresholds": { "autoApply": 0.95, "recommend": 0.8, "suggest": 0.5 },
-  "namingWeights": { "sourceMatch": 30, "methodMatch": 20, "propertyMatch": 20, "usageMatch": 15, "typeMatch": 10, "conventionMatch": 10 },
-  "complexity": { "maxFunctionLines": 60, "maxNesting": 4, "maxParams": 5, "maxCyclomatic": 12 },
-
-  "ignore": ["legacy/**"],
+  "thresholds": {
+    "autoApply": 0.95,
+    "recommend": 0.8,
+    "suggest": 0.5
+  },
+  "namingWeights": {
+    "sourceMatch": 30,
+    "methodMatch": 20,
+    "propertyMatch": 20,
+    "usageMatch": 15,
+    "typeMatch": 10,
+    "conventionMatch": 10
+  },
+  "complexity": {
+    "maxFunctionLines": 60,
+    "maxNesting": 4,
+    "maxParams": 5,
+    "maxCyclomatic": 12
+  },
+  "ignore": [
+    "legacy/**"
+  ],
   "omit": [],
   "include": [],
-  "validationOptions": { "typecheck": true, "runCommands": false, "commandTimeoutMs": 120000 },
-  "languagePacks": []
+  "validationOptions": {
+    "typecheck": true,
+    "runCommands": false,
+    "commandTimeoutMs": 120000
+  },
+  "languagePacks": [],
+  "language": "auto",
+  "renameGlobals": "auto",
+  "ai": {
+    "provider": "local",
+    "model": "qwen2.5-coder",
+    "baseUrl": "http://localhost:11434/v1",
+    "apiKeyEnv": "",
+    "timeoutMs": 30000
+  }
 }

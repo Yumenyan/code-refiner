@@ -14,11 +14,11 @@ function isBusy(count) {
 function render(list) {
   const activeStations = stations.filter((station) => station.active);
   const ul = document.getElementById("station-list");
-  let t = "";
+  let html = "";
   for (var i = 0; i < activeStations.length; i++) {
-    t += '<li class="station-item active">' + activeStations[i].name + "</li>";
+    html += `<li class="station-item active">${activeStations[i].name}</li>`;
   }
-  ul.innerHTML = t;
+  ul.innerHTML = html;
   return activeStations;
 }
 

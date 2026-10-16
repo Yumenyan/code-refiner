@@ -22,6 +22,8 @@ export interface ProjectFile {
   /** True when the file is not copied into the refined project at all. */
   omitted: boolean;
   ignoreReason?: string;
+  /** Text encoding detected for text files (default utf-8). */
+  encoding?: string;
   /** Raw bytes (absent for omitted files). */
   data?: Buffer;
 }

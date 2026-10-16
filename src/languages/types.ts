@@ -32,6 +32,14 @@ export interface ProjectContext {
   /** Global names that other files (HTML handlers, window.x ...) rely on. Never renamed. */
   protectedNames: Set<string>;
   advisor?: AIAdvisor;
+  /** Whether top-level names of classic scripts may be renamed at all (see Config.renameGlobals). */
+  globalPolicy?: 'never' | 'unreferenced';
+  /** True when another file (or an inline handler) mentions `name`. */
+  usedElsewhere?: (name: string, file: string) => boolean;
+  /** Language for AI rationales and messages. */
+  language?: 'en' | 'ja';
+  /** Detected naming convention in words, for the AI prompt. */
+  conventionNote?: string;
   /** Refines a code fragment embedded in another file (e.g. <script> in HTML). */
   refineEmbedded?: (language: string, source: string, opts: EmbeddedOptions) => Promise<RefineOutput>;
 }
@@ -55,6 +63,8 @@ export interface RefineOutput {
   changes: Change[];
   suggestions: Suggestion[];
   warnings: Warning[];
+  /** Public names (e.g. `global:foo`) the pack changed on purpose; the validation gate must not flag them. */
+  surfaceChanges?: string[];
 }
 
 export interface AnalyzeInput {

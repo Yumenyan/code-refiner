@@ -11,6 +11,8 @@ export interface FileState {
   refined: string;
   /** Rule ids that touched the file besides pure formatting. */
   semanticRules: string[];
+  /** Public names the pack changed deliberately (e.g. renamed private globals). */
+  surfaceExempt?: string[];
 }
 
 export interface ValidationCheck {
@@ -66,7 +68,9 @@ export async function validateFiles(
     if (pack.surface) {
       const before = pack.surface(s.original, s.path);
       const after = pack.surface(s.refined, s.path);
-      if (before && after && before.join('|') !== after.join('|')) {
+      const exempt = new Set(s.surfaceExempt ?? []);
+      const strip = (l: string[] | undefined) => l?.filter((n) => !exempt.has(n));
+      if (before && after && strip(before)!.join('|') !== strip(after)!.join('|')) {
         rollback(s, 'exported / global names changed', 'surface');
         continue;
       }

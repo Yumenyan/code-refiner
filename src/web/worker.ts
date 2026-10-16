@@ -10,7 +10,7 @@ import * as markdown from 'prettier/plugins/markdown';
 import * as postcss from 'prettier/plugins/postcss';
 import * as typescript from 'prettier/plugins/typescript';
 import * as yaml from 'prettier/plugins/yaml';
-import { AnthropicAdvisor } from '../ai/anthropic.js';
+import { createAdvisor } from '../ai/anthropic.js';
 import { resolveConfig } from '../core/config.js';
 import { unifiedDiff } from '../core/diff.js';
 import { scanEntries, scanZipBuffer } from '../core/scanner.js';
@@ -20,6 +20,7 @@ import { configurePrettier } from '../languages/prettier-api.js';
 import { configureTreeSitter } from '../languages/treesitter/runtime.js';
 import { refineProject } from '../pipeline.js';
 import { renderReportHtml } from '../report/html.js';
+import { translateMessage } from '../i18n/ja.js';
 
 const plugins = [babel, estree, graphql, html, markdown, postcss, typescript, yaml];
 configurePrettier({ format: (source, options) => standalone.format(source, { ...options, plugins } as never) });
@@ -39,7 +40,13 @@ export interface WorkerRequest {
   name: string;
   zip?: ArrayBuffer;
   entries?: { path: string; data: ArrayBuffer }[];
-  options: { mode: string; renameVariables: boolean; removeUnused: boolean; aiKey?: string };
+  options: {
+    mode: string;
+    renameVariables: boolean;
+    removeUnused: boolean;
+    language: 'en' | 'ja';
+    ai?: { provider: 'anthropic' | 'openai' | 'gemini' | 'local'; model: string; baseUrl: string; key: string };
+  };
 }
 
 export type WorkerMessage = WorkerResult | { type: 'log' | 'error'; id: number; message: string };
@@ -64,27 +71,29 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
       mode: req.options.mode,
       renameVariables: req.options.renameVariables,
       removeUnused: req.options.removeUnused,
-      aiAdvisor: !!req.options.aiKey,
+      aiAdvisor: !!req.options.ai,
+      language: req.options.language,
+      ai: req.options.ai ? { provider: req.options.ai.provider, model: req.options.ai.model, baseUrl: req.options.ai.baseUrl, apiKeyEnv: '', timeoutMs: 60_000 } : undefined,
       validationOptions: { typecheck: false, runCommands: false, commandTimeoutMs: 1000 },
     });
     const project = req.zip
       ? scanZipBuffer(new Uint8Array(req.zip), req.name, config)
       : scanEntries(req.name, (req.entries ?? []).map((e) => ({ path: e.path, data: new Uint8Array(e.data) })), config, 'folder');
     const registry = await createRegistry({ native: false });
-    const advisor = req.options.aiKey ? new AnthropicAdvisor(config.ai, req.options.aiKey, fetch.bind(globalThis), 60, { 'anthropic-dangerous-direct-browser-access': 'true' }) : undefined;
-    const result = await refineProject(project, config, { registry, advisor, log: (m) => post({ type: 'log', id: req.id, message: m }) });
+    const setup = createAdvisor(config, {}, { apiKey: req.options.ai?.key, fetchImpl: fetch.bind(globalThis), browser: true });
+    const result = await refineProject(project, config, { registry, advisor: setup.advisor, log: (m) => post({ type: 'log', id: req.id, message: m }) });
     const files = [...result.refined.entries()].map(([path, data]) => ({ path, data: new Uint8Array(data).buffer as ArrayBuffer }));
     const zip = writeZip([...result.refined.entries()].map(([path, data]) => ({ path, data })));
     const out: WorkerResult = {
       type: 'done',
       id: req.id,
       stats: { files: result.stats.totalFiles, changed: result.stats.changedFiles, warnings: result.stats.warnings, renames: result.stats.renames, rolledBack: result.stats.rolledBack },
-      report: renderReportHtml(result),
+      report: renderReportHtml(result, req.options.language),
       diff: result.diffs.map(unifiedDiff).join('\n'),
       files,
       zip: zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength) as ArrayBuffer,
-      aiNote: config.aiAdvisor && !result.aiUsed ? 'AI Advisor was requested but could not be used.' : '',
-      warnings: result.warnings.slice(0, 20).map((w) => `${w.file ? w.file + ': ' : ''}${w.message}`),
+      aiNote: config.aiAdvisor && !result.aiUsed ? translateMessage(setup.warning ?? 'AI Advisor was requested but could not be used.', req.options.language) : '',
+      warnings: result.warnings.slice(0, 20).map((w) => `${w.file ? w.file + ': ' : ''}${translateMessage(w.message, req.options.language)}`),
     };
     post(out, [out.zip, ...files.map((f) => f.data)]);
   } catch (e) {

@@ -5,6 +5,7 @@ import { DEFAULT_CONFIG, loadConfigFile, resolveConfig, ConfigError, type Config
 import { refine } from './node.js';
 import { createDefaultRegistry } from './languages/index.js';
 import { startUi } from './ui/server.js';
+import { resolveLanguage } from './i18n/lang.js';
 
 const HELP = `CodeRefiner – restructure machine-written code into human-maintainable projects.
 
@@ -18,7 +19,13 @@ Options:
   -o, --out <dir>          output directory (default: <input>-refined next to the input)
   -m, --mode <level>       safe (default) | cautious | aggressive
   -c, --config <file>      JSON config file
-      --ai                 enable the optional AI Advisor (needs ANTHROPIC_API_KEY)
+      --ai                 enable the optional AI Advisor (see --ai-provider)
+      --ai-provider <p>    anthropic (default) | openai | gemini | local
+                           keys come from ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY;
+                           local = any OpenAI-compatible server (Ollama, LM Studio ...), no key needed
+      --ai-model <name>    model name (defaults: claude-haiku-5-5 / gpt-4o-mini / gemini-2.0-flash / llama3.2)
+      --ai-base-url <url>  API endpoint (local default: http://localhost:11434/v1)
+      --lang <en|ja>       language of the report and messages (default: from LANG)
       --no-rename          do not rename variables
       --remove-unused      remove unused imports / unreachable code / pure unused locals (cautious+)
       --no-validate        skip validation (not recommended)
@@ -35,7 +42,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const flags = new Map<string, string | true>();
   const positional: string[] = [];
-  const withValue = new Set(['out', 'o', 'mode', 'm', 'config', 'c', 'port']);
+  const withValue = new Set(['out', 'o', 'mode', 'm', 'config', 'c', 'port', 'ai-provider', 'ai-model', 'ai-base-url', 'lang']);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith('--') || (a.startsWith('-') && a.length === 2)) {
@@ -54,7 +61,7 @@ async function main(): Promise<number> {
   const [cmd] = args.positional;
   if (!cmd || flag(args, 'h', 'help')) {
     process.stdout.write(HELP);
-    return cmd ? 0 : 1;
+    return flag(args, 'h', 'help') ? 0 : 1;
   }
 
   if (cmd === 'rules') {
@@ -80,6 +87,20 @@ async function main(): Promise<number> {
   const mode = flag(args, 'mode', 'm');
   if (typeof mode === 'string') overrides.mode = mode as Config['mode'];
   if (flag(args, 'ai')) overrides.aiAdvisor = true;
+  const provider = flag(args, 'ai-provider');
+  const model = flag(args, 'ai-model');
+  const baseUrl = flag(args, 'ai-base-url');
+  if (typeof provider === 'string' || typeof model === 'string' || typeof baseUrl === 'string') {
+    overrides.aiAdvisor = true;
+    overrides.ai = {
+      ...base.ai,
+      ...(typeof provider === 'string' ? { provider: provider as Config['ai']['provider'] } : {}),
+      ...(typeof model === 'string' ? { model } : {}),
+      ...(typeof baseUrl === 'string' ? { baseUrl } : {}),
+    };
+  }
+  const langFlag = flag(args, 'lang');
+  if (typeof langFlag === 'string') overrides.language = langFlag as Config['language'];
   if (flag(args, 'no-rename')) overrides.renameVariables = false;
   if (flag(args, 'remove-unused')) overrides.removeUnused = true;
   if (flag(args, 'no-validate')) overrides.validation = false;
@@ -109,8 +130,13 @@ async function main(): Promise<number> {
   const quiet = !!flag(args, 'q', 'quiet');
   const result = await refine(input, out, config, { log: quiet ? undefined : (m) => console.log(m) });
   const s = result.stats;
-  console.log(`\nFiles: ${s.totalFiles}   Changed: ${s.changedFiles}   Warnings: ${s.warnings}   Renames: ${s.renames}   Rolled back: ${s.rolledBack}`);
-  console.log(`Output: ${out}\n  refined/  original/  refined-project.zip  report.html  report.json  changes.diff`);
+  if (resolveLanguage(config.language) === 'ja') {
+    console.log(`\nファイル: ${s.totalFiles}   変更: ${s.changedFiles}   警告: ${s.warnings}   名前変更: ${s.renames}   ロールバック: ${s.rolledBack}`);
+    console.log(`出力先: ${out}\n  refined/  original/  refined-project.zip  report.html  report.json  changes.diff`);
+  } else {
+    console.log(`\nFiles: ${s.totalFiles}   Changed: ${s.changedFiles}   Warnings: ${s.warnings}   Renames: ${s.renames}   Rolled back: ${s.rolledBack}`);
+    console.log(`Output: ${out}\n  refined/  original/  refined-project.zip  report.html  report.json  changes.diff`);
+  }
   return 0;
 }
 

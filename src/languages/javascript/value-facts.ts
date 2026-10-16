@@ -37,8 +37,10 @@ export function wordsOfExpression(node: t.Node | null | undefined): { words: str
   if (ws.length > 1 && ['list', 'array', 'items', 'data', 'collection', 'set', 'map'].includes(last)) {
     return { words: ws.slice(0, -1).map((w, i, a) => (i === a.length - 1 ? singularize(w) : w)), plural: true };
   }
-  const plural = looksPlural(last);
-  return { words: [...ws.slice(0, -1), plural ? singularize(last) : last], plural };
+  // Japanese (and other non-ASCII) names carry no plural marker: treat them as possible collections.
+  const nonAscii = /[^\u0000-\u007f]/.test(last);
+  const plural = looksPlural(last) || nonAscii;
+  return { words: [...ws.slice(0, -1), plural && !nonAscii ? singularize(last) : last], plural };
 }
 
 function literalString(node: t.Node | undefined | null): string | undefined {
@@ -190,6 +192,16 @@ export function inferValue(expr: t.Node | null | undefined, scope?: Scope): Valu
     return { ...info, sources: src ? [src] : [] };
   }
 
+  // document.getElementById('input').value  ->  the element's property
+  if (t.isMemberExpression(node) && !node.computed && t.isIdentifier(node.property) && ['value', 'textContent', 'innerText', 'checked', 'innerHTML'].includes(node.property.name)) {
+    const inner = inferValue(node.object, scope);
+    const dom = inner.facts.find((f) => f.type === 'dom');
+    if (dom) {
+      const p = node.property.name;
+      return { valueType: p === 'checked' ? 'boolean' : 'string', facts: [dom, { type: 'property', name: p, role: 'read' }], sources: [], via: 'dom' };
+    }
+  }
+
   // `x.length`
   if (t.isMemberExpression(node) && !node.computed && t.isIdentifier(node.property, { name: 'length' })) {
     const w = wordsOfExpression(node.object);
@@ -279,6 +291,12 @@ export function inferValue(expr: t.Node | null | undefined, scope?: Scope): Valu
     }
   }
 
+  // foo(...): keep the callee's name, `calcTotal()` -> total
+  if (t.isCallExpression(node) && t.isIdentifier(node.callee)) {
+    const b = scope?.getBinding(node.callee.name);
+    const isLocalFn = !!b && (b.path.isFunction() || (b.path.isVariableDeclarator() && !!b.path.node.init && t.isFunction(b.path.node.init)));
+    if (isLocalFn || !b) return { ...info, facts: [{ type: 'call', callee: node.callee.name }], via: 'call' };
+  }
   if (t.isCallExpression(node) || t.isNewExpression(node) || awaited) return info;
   return info;
 }

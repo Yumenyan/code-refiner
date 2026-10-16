@@ -3,7 +3,8 @@ import type { Rule, RuleHit } from '../../core/rule-engine.js';
 import { snippet } from '../../core/text.js';
 import { isBindingExported } from './semantic.js';
 import { traverse, type NodePath } from './traverse.js';
-import { isBooleanExpression } from './value-facts.js';
+import { isBooleanExpression, inferValue, wordsOfExpression } from './value-facts.js';
+import { joinWords, isValidIdentifier } from '../../naming/words.js';
 
 export interface EcmaRuleContext {
   source: string;
@@ -12,6 +13,8 @@ export interface EcmaRuleContext {
   removeUnused: boolean;
   hasJsx: boolean;
   language: 'javascript' | 'typescript';
+  /** May a classic-script global with this name be touched? */
+  allowGlobal?: (name: string) => boolean;
 }
 
 export type EcmaRule = Rule<t.File, EcmaRuleContext>;
@@ -326,7 +329,11 @@ export const varToLetConst: EcmaRule = {
         if (node.kind !== 'var' || (node as { declare?: boolean }).declare) return;
         const parent = path.parentPath;
         if (!(parent.isBlockStatement() || parent.isProgram())) return; // not for-init, not labelled etc.
-        if (parent.isProgram() && !ctx.isModule) return; // global var creates window properties
+        if (parent.isProgram() && !ctx.isModule) {
+          // a global `var` is a window property: only when nothing else can observe it
+          const names = node.declarations.flatMap((d) => Object.keys(t.getBindingIdentifiers(d.id)));
+          if (!ctx.allowGlobal || !names.every((n) => ctx.allowGlobal!(n))) return;
+        }
         const block = parent.node as t.BlockStatement | t.Program;
         const inLoop = !!path.findParent((p) => p.isLoop());
         const insideFunctionLevelBlock = parent.isProgram() || (parent.isBlockStatement() && parent.parentPath.isFunction());
@@ -503,6 +510,184 @@ export const removeUnusedLocals: EcmaRule = {
   },
 };
 
+
+export const letToConst: EcmaRule = {
+  id: 'let-to-const',
+  description: 'let -> const when the variable is never reassigned',
+  level: 'safe',
+  apply(ast, ctx) {
+    const hits: RuleHit[] = [];
+    traverse(ast, {
+      VariableDeclaration(path) {
+        const node = path.node;
+        if (node.kind !== 'let' || (node as { declare?: boolean }).declare || path.parentPath.isExportNamedDeclaration()) return;
+        const inLoopHead = (path.parentPath.isForOfStatement() || path.parentPath.isForInStatement()) && path.parentPath.node.left === node;
+        const okParent = inLoopHead || path.parentPath.isBlockStatement() || path.parentPath.isProgram() || path.parentPath.isSwitchCase();
+        if (!okParent) return;
+        for (const d of node.declarations) {
+          if (!t.isIdentifier(d.id) || (!d.init && !inLoopHead)) return;
+          const b = path.scope.getBinding(d.id.name);
+          if (!b || b.constantViolations.length > 0 || b.path.node !== d) return;
+        }
+        const before = text(ctx, node);
+        node.kind = 'const';
+        hits.push({ description: 'let -> const (never reassigned)', loc: loc(node), before: snippet(before ?? '', 60) });
+      },
+    });
+    return hits;
+  },
+};
+
+function escapeTemplate(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${').replace(/\r/g, '\\r').replace(/\n/g, '\\n').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+}
+
+export const templateLiterals: EcmaRule = {
+  id: 'concat-to-template',
+  description: "'a' + x + 'b'  ->  `a${x}b`  (only chains that are certainly string concatenations)",
+  level: 'cautious',
+  apply(ast, ctx) {
+    const hits: RuleHit[] = [];
+    traverse(ast, {
+      BinaryExpression: {
+        exit(path) {
+          const node = path.node;
+          if (node.operator !== '+') return;
+          const parent = path.parentPath.node;
+          if (t.isBinaryExpression(parent, { operator: '+' }) && parent.left === node) return; // not the outermost chain
+          const operands: t.Expression[] = [];
+          let cur: t.Expression = node;
+          while (t.isBinaryExpression(cur, { operator: '+' }) && !cur.extra?.parenthesized) {
+            operands.unshift(cur.right as t.Expression);
+            cur = cur.left as t.Expression;
+          }
+          operands.unshift(cur);
+          // Every `+` must be a concatenation: the leftmost operand is a string, or the second one is
+          // (`a + 'x'` is a string whatever `a` is, and everything after that concatenates too).
+          if (!t.isStringLiteral(operands[0]) && !(operands.length >= 2 && t.isStringLiteral(operands[1]))) return;
+          if (operands.length < 2 || operands.every((o) => t.isStringLiteral(o) || t.isTemplateLiteral(o))) return;
+          if (operands.length === 2 && t.isStringLiteral(operands[0]) && operands[0].value === '') return; // '' + x is the coercion idiom
+          if (operands.length === 2 && t.isStringLiteral(operands[1]) && operands[1].value === '') return; // x + '' too
+          const quasis: string[] = [''];
+          const exprs: t.Expression[] = [];
+          for (const o of operands) {
+            if (t.isStringLiteral(o)) quasis[quasis.length - 1] += o.value;
+            else {
+              exprs.push(o);
+              quasis.push('');
+            }
+          }
+          if (operands.some((o) => hasComments(o))) return;
+          const before = text(ctx, node);
+          const tpl = t.templateLiteral(
+            quasis.map((q, i) => t.templateElement({ raw: escapeTemplate(q), cooked: q }, i === quasis.length - 1)),
+            exprs,
+          );
+          path.replaceWith(tpl);
+          hits.push({ description: 'String concatenation -> template literal', loc: loc(node), before: snippet(before ?? '', 70) });
+        },
+      },
+    });
+    return hits;
+  },
+};
+
+const MUTATORS = new Set(['push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin']);
+
+function sameSimpleExpr(a: t.Node, b: t.Node): boolean {
+  if (t.isIdentifier(a) && t.isIdentifier(b)) return a.name === b.name;
+  if (t.isThisExpression(a) && t.isThisExpression(b)) return true;
+  if (t.isMemberExpression(a) && t.isMemberExpression(b) && !a.computed && !b.computed && t.isIdentifier(a.property) && t.isIdentifier(b.property)) {
+    return a.property.name === b.property.name && sameSimpleExpr(a.object, b.object);
+  }
+  return false;
+}
+
+export const forIndexToForOf: EcmaRule = {
+  id: 'for-index-to-for-of',
+  description: 'for (var i = 0; i < xs.length; i++) { ... xs[i] ... }  ->  for (const x of xs) { ... x ... }',
+  level: 'aggressive',
+  apply(ast, ctx) {
+    const hits: RuleHit[] = [];
+    traverse(ast, {
+      ForStatement(path) {
+        const { init, test, update, body } = path.node;
+        if (!init || !t.isVariableDeclaration(init) || init.declarations.length !== 1 || !test || !update) return;
+        const decl = init.declarations[0];
+        if (!t.isIdentifier(decl.id) || !t.isNumericLiteral(decl.init, { value: 0 })) return;
+        const i = decl.id.name;
+        if (!t.isBinaryExpression(test, { operator: '<' }) || !t.isIdentifier(test.left, { name: i })) return;
+        const lenExpr = test.right;
+        if (!t.isMemberExpression(lenExpr) || lenExpr.computed || !t.isIdentifier(lenExpr.property, { name: 'length' })) return;
+        const arr = lenExpr.object;
+        if (!(t.isIdentifier(arr) || (t.isMemberExpression(arr) && sameSimpleExpr(arr, arr)))) return;
+        const stepOk = (t.isUpdateExpression(update, { operator: '++' }) && t.isIdentifier(update.argument, { name: i })) || (t.isAssignmentExpression(update, { operator: '+=' }) && t.isIdentifier(update.left, { name: i }) && t.isNumericLiteral(update.right, { value: 1 }));
+        if (!stepOk) return;
+        const binding = path.scope.getBinding(i);
+        if (!binding || binding.constantViolations.length !== 1) return;
+        // every use of the index must be `arr[i]` as a plain read inside the body
+        const reads: NodePath[] = [];
+        for (const ref of binding.referencePaths) {
+          if (ref.node === test.left || ref.node === (update as t.UpdateExpression).argument || ref.node === (update as t.AssignmentExpression).left) continue;
+          const m = ref.parentPath;
+          if (!m || !m.isMemberExpression() || m.node.property !== ref.node || !m.node.computed || !sameSimpleExpr(m.node.object, arr)) return;
+          if (!m.findParent((p) => p.node === body) && m.parentPath?.node !== body) return;
+          const g = m.parentPath;
+          if (g?.isAssignmentExpression() && g.node.left === m.node) return;
+          if (g?.isUpdateExpression() || g?.isUnaryExpression({ operator: 'delete' })) return;
+          if (g?.isCallExpression() && g.node.callee === m.node) return;
+          if (m.getFunctionParent() !== path.getFunctionParent()) return; // closures would see a different binding
+          reads.push(m);
+        }
+        if (!reads.length) return;
+        // the collection must not be mutated by the loop itself
+        let mutated = false;
+        path.get('body').traverse({
+          AssignmentExpression(a) {
+            if (sameSimpleExpr(a.node.left, arr) || (t.isMemberExpression(a.node.left) && sameSimpleExpr(a.node.left.object, arr))) mutated = true;
+          },
+          CallExpression(c) {
+            const cal = c.node.callee;
+            if (t.isMemberExpression(cal) && sameSimpleExpr(cal.object, arr) && t.isIdentifier(cal.property) && MUTATORS.has(cal.property.name)) mutated = true;
+          },
+          UpdateExpression(u) {
+            if (t.isMemberExpression(u.node.argument) && sameSimpleExpr(u.node.argument.object, arr)) mutated = true;
+          },
+        });
+        if (mutated) return;
+        if (t.isIdentifier(arr)) {
+          const ab = path.scope.getBinding(arr.name);
+          if (ab && inferValue(ab.path.isVariableDeclarator() ? ab.path.node.init : null, path.scope).valueType === 'string') return;
+          if (ab && ab.constantViolations.some((v) => v.node.start != null && path.node.start != null && v.node.start >= path.node.start && v.node.end! <= path.node.end!)) return;
+        }
+        // element name from the collection: stations -> station
+        const w = wordsOfExpression(arr);
+        const candidates = [w ? joinWords(w.words) : '', 'item', 'element'].filter((n) => n && isValidIdentifier(n));
+        const program = path.scope.getProgramParent();
+        const name = candidates.find((n) => !path.scope.hasBinding(n) && !program.globals[n] && !path.get('body').scope.hasBinding(n));
+        if (!name) return;
+        let nested = false;
+        path.get('body').traverse({ Scopable(s) { if (s.scope.hasOwnBinding(name)) nested = true; } });
+        if (nested) return;
+        const before = text(ctx, test);
+        for (const m of reads) m.replaceWith(t.identifier(name));
+        const kind: 'const' = 'const';
+        // Mutate in place so recast keeps the loop's position and spacing instead of reprinting it as a new statement.
+        const loop = path.node as unknown as Record<string, unknown>;
+        loop.type = 'ForOfStatement';
+        loop.left = t.variableDeclaration(kind, [t.variableDeclarator(t.identifier(name))]);
+        loop.right = arr;
+        loop.await = false;
+        delete loop.init;
+        delete loop.test;
+        delete loop.update;
+        hits.push({ description: `Index loop over "${t.isIdentifier(arr) ? arr.name : 'collection'}" -> for…of with "${name}"`, loc: loc(path.node), before: before ? `i < ${before}`.slice(0, 60) : undefined, confidence: 0.9 });
+      },
+    });
+    return hits;
+  },
+};
+
 export const ECMA_RULES: EcmaRule[] = [
   removeEmptyStatements,
   ifReturnBoolean(false),
@@ -516,6 +701,9 @@ export const ECMA_RULES: EcmaRule[] = [
   mergeDuplicateImports,
   sortImports,
   varToLetConst,
+  letToConst,
+  templateLiterals,
+  forIndexToForOf,
   removeUnusedImports,
   removeUnreachable,
   functionToArrow,

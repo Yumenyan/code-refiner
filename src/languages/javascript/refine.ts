@@ -3,9 +3,10 @@ import { renameApplyThreshold } from '../../core/config.js';
 import { hitToChange, rulesFor } from '../../core/rule-engine.js';
 import type { Change, Suggestion, Warning } from '../../core/types.js';
 import { snippet } from '../../core/text.js';
-import { applyAdvice, classifyConfidence, proposeNames } from '../../naming/engine.js';
+import { applyAdvice, classifyConfidence, proposeNames, withProposal } from '../../naming/engine.js';
 import { splitWords } from '../../naming/words.js';
 import type { FormatterAdapter, RefineInput, RefineOutput } from '../types.js';
+import type { NamingAdvice } from '../../ai/advisor.js';
 import { sameAst } from './ast-compare.js';
 import { collectRenameTargets, conflictsWith } from './naming-adapter.js';
 import { parseEcma, parseRecast, printRecast, errorMessage, type EcmaLanguage } from './parser.js';
@@ -73,6 +74,8 @@ function detectJsx(ast: t.File): boolean {
   return jsx;
 }
 
+const adviceCache = new WeakMap<object, Map<string, NamingAdvice | null>>();
+
 function scopeChainNames(scope: Scope): Set<string> {
   const names = new Set<string>();
   let s: Scope | null = scope;
@@ -101,7 +104,14 @@ export async function refineEcma(input: RefineInput, language: EcmaLanguage, for
   const originalSurface = surfaceOf(input.source, vfile, language);
   let current = input.source;
 
-  const accept = (next: string, label: string, silent = false): boolean => {
+  // Classic-script globals may only be touched when nothing else can observe them.
+  const policy = project.globalPolicy ?? 'never';
+  const windowAccess = new Set([...input.source.matchAll(/\b(?:window|globalThis|self)\s*\.\s*([A-Za-z_$][\w$]*)/g)].map((m) => m[1]));
+  const dynamicWindow = /\b(?:window|globalThis|self)\s*\[|\beval\s*\(|\bnew\s+Function\b|\bwith\s*\(/.test(input.source);
+  const allowGlobal = (name: string): boolean =>
+    policy === 'unreferenced' && !dynamicWindow && !windowAccess.has(name) && !project.protectedNames.has(name) && !(project.usedElsewhere?.(name, file) ?? false);
+
+  const accept = (next: string, label: string, silent = false, renamed?: Set<string>): boolean => {
     const warnIf = silent ? () => undefined : warn;
     try {
       parseEcma(next, vfile, language);
@@ -110,7 +120,8 @@ export async function refineEcma(input: RefineInput, language: EcmaLanguage, for
       return false;
     }
     const surface = surfaceOf(next, vfile, language);
-    if (originalSurface && surface && originalSurface.join('|') !== surface.join('|')) {
+    const strip = (list: string[] | undefined) => (renamed?.size ? list?.filter((n) => !renamed.has(n)) : list);
+    if (originalSurface && surface && strip(originalSurface)!.join('|') !== strip(surface)!.join('|')) {
       warnIf('rule-rolled-back', `${label}: exported/global names would change; change reverted`);
       return false;
     }
@@ -119,11 +130,11 @@ export async function refineEcma(input: RefineInput, language: EcmaLanguage, for
 
   // ---- Refactoring rules (Parse -> Transform -> Parse again) ------------------------------
   const rules = rulesFor(ECMA_RULES, config.mode);
-  const ctxFor = (src: string): EcmaRuleContext => ({ source: src, file, isModule, removeUnused: config.removeUnused, hasJsx, language });
+  const ctxFor = (src: string): EcmaRuleContext => ({ source: src, file, isModule, removeUnused: config.removeUnused, hasJsx, language, allowGlobal });
 
   // Fast path: every rule on one tree, one print, one verification. If anything looks wrong we
   // discard the result and redo the work rule by rule so a single bad rule cannot take others down.
-  const fast = await (async (): Promise<{ code: string; changes: Change[]; suggestions: Suggestion[]; warnings: Warning[] } | null> => {
+  const fast = await (async (): Promise<{ code: string; changes: Change[]; suggestions: Suggestion[]; warnings: Warning[]; globalNames: Set<string> } | null> => {
     try {
       const ast = parseRecast(current, vfile, language);
       const ctx = ctxFor(current);
@@ -134,27 +145,31 @@ export async function refineEcma(input: RefineInput, language: EcmaLanguage, for
       }
       let suggestions: Suggestion[] = [];
       let warnings: Warning[] = [];
+      let globalNames = new Set<string>();
       if (config.renameVariables) {
         traverse.cache.clear();
         const r = await applyRenames(ast, current, input);
         changes.push(...r.changes);
         suggestions = r.suggestions;
         warnings = r.warnings;
+        globalNames = r.globalNames;
       }
-      if (!changes.length) return { code: current, changes, suggestions, warnings };
+      if (!changes.length) return { code: current, changes, suggestions, warnings, globalNames };
       const printed = printRecast(ast);
-      return accept(printed, 'refactoring', true) ? { code: printed, changes, suggestions, warnings } : null;
+      return accept(printed, 'refactoring', true, globalNames) ? { code: printed, changes, suggestions, warnings, globalNames } : null;
     } catch {
       return null;
     }
   })();
   traverse.cache.clear();
   let renamedInFastPath = false;
+  const surfaceChanges = new Set<string>();
   if (fast) {
     current = fast.code;
     out.changes.push(...fast.changes);
     out.suggestions.push(...fast.suggestions);
     out.warnings.push(...fast.warnings);
+    fast.globalNames.forEach((n) => surfaceChanges.add(n));
     renamedInFastPath = true;
   } else {
     // Isolation path: one rule at a time, each verified on its own.
@@ -194,6 +209,7 @@ export async function refineEcma(input: RefineInput, language: EcmaLanguage, for
     out.changes.push(...r.changes);
     out.suggestions.push(...r.suggestions);
     out.warnings.push(...r.warnings);
+    r.globalNames.forEach((n) => surfaceChanges.add(n));
   }
 
   // ---- Formatting ----------------------------------------------------------------------------
@@ -214,6 +230,7 @@ export async function refineEcma(input: RefineInput, language: EcmaLanguage, for
   }
 
   out.code = current;
+  out.surfaceChanges = [...surfaceChanges];
   if (current !== input.source) {
     out.changes.push({ file, kind: 'format', ruleId: 'format', level: 'safe', description: `Formatted (${formatter.id})`, confidence: 1 });
   }
@@ -225,9 +242,9 @@ async function renameStep(
   input: RefineInput,
   language: EcmaLanguage,
   vfile: string,
-  accept: (next: string, label: string) => boolean,
-): Promise<{ code: string; changes: Change[]; suggestions: Suggestion[]; warnings: Warning[] }> {
-  const res = { code: source, changes: [] as Change[], suggestions: [] as Suggestion[], warnings: [] as Warning[] };
+  accept: (next: string, label: string, silent?: boolean, renamed?: Set<string>) => boolean,
+): Promise<{ code: string; changes: Change[]; suggestions: Suggestion[]; warnings: Warning[]; globalNames: Set<string> }> {
+  const res = { code: source, changes: [] as Change[], suggestions: [] as Suggestion[], warnings: [] as Warning[], globalNames: new Set<string>() };
   let ast: t.File;
   try {
     ast = parseRecast(source, vfile, language);
@@ -238,6 +255,7 @@ async function renameStep(
   res.changes = r.changes;
   res.suggestions = r.suggestions;
   res.warnings = r.warnings;
+  res.globalNames = r.globalNames;
   if (r.renamed > 0) {
     let printed: string;
     try {
@@ -248,7 +266,7 @@ async function renameStep(
       res.suggestions = res.suggestions.filter((s) => !s.details?.applied);
       return res;
     }
-    if (accept(printed, 'rename-variable')) res.code = printed;
+    if (accept(printed, 'rename-variable', false, r.globalNames)) res.code = printed;
     else {
       res.changes = [];
       res.suggestions = res.suggestions.filter((s) => !s.details?.applied);
@@ -257,18 +275,52 @@ async function renameStep(
   return res;
 }
 
-/** Finds poorly named bindings in `ast`, renames the confident ones in place and reports the rest. */
+/**
+ * Two passes: renaming `x` to `activeStations` gives `for (const item of activeStations)` the
+ * evidence it needs to become `activeStation`, which only exists once the first pass is done.
+ */
 async function applyRenames(
   ast: t.File,
   source: string,
   input: RefineInput,
-): Promise<{ changes: Change[]; suggestions: Suggestion[]; warnings: Warning[]; renamed: number }> {
+): Promise<{ changes: Change[]; suggestions: Suggestion[]; warnings: Warning[]; renamed: number; globalNames: Set<string> }> {
+  const first = await applyRenamesOnce(ast, source, input);
+  if (first.renamed === 0) return first;
+  traverse.cache.clear();
+  const second = await applyRenamesOnce(ast, source, input);
+  const key = (s: Suggestion) => `${s.loc?.line}:${s.loc?.column}`;
+  const appliedLater = new Set(second.suggestions.filter((s) => s.details?.applied === true).map(key));
+  const seen = new Set(first.suggestions.map((s) => `${key(s)}|${s.message}`));
+  return {
+    changes: [...first.changes, ...second.changes],
+    suggestions: [
+      ...first.suggestions.filter((s) => s.details?.applied === true || !appliedLater.has(key(s))),
+      ...second.suggestions.filter((s) => !seen.has(`${key(s)}|${s.message}`)),
+    ],
+    warnings: [...first.warnings, ...second.warnings],
+    renamed: first.renamed + second.renamed,
+    globalNames: new Set([...first.globalNames, ...second.globalNames]),
+  };
+}
+
+/** Finds poorly named bindings in `ast`, renames the confident ones in place and reports the rest. */
+async function applyRenamesOnce(
+  ast: t.File,
+  source: string,
+  input: RefineInput,
+): Promise<{ changes: Change[]; suggestions: Suggestion[]; warnings: Warning[]; renamed: number; globalNames: Set<string> }> {
   const { file, config, project } = input;
-  const res = { changes: [] as Change[], suggestions: [] as Suggestion[], warnings: [] as Warning[], renamed: 0 };
+  const res = { changes: [] as Change[], suggestions: [] as Suggestion[], warnings: [] as Warning[], renamed: 0, globalNames: new Set<string>() };
   const threshold = renameApplyThreshold(config);
   const abbreviations = new Set(project.naming.vocabulary.abbreviations.map((a) => a.abbreviation));
 
+  const policy = project.globalPolicy ?? 'never';
+  const windowAccess = new Set([...source.matchAll(/\b(?:window|globalThis|self)\s*\.\s*([A-Za-z_$][\w$]*)/g)].map((m) => m[1]));
+  const dynamicWindow = /\b(?:window|globalThis|self)\s*\[|\beval\s*\(|\bnew\s+Function\b|\bwith\s*\(/.test(source);
+  const allowGlobal = (name: string): boolean =>
+    policy === 'unreferenced' && !dynamicWindow && !windowAccess.has(name) && !project.protectedNames.has(name) && !(project.usedElsewhere?.(name, file) ?? false);
   const targets = collectRenameTargets(ast, file, {
+    allowGlobal,
     protectedNames: project.protectedNames,
     isCandidateName: (name) => splitWords(name).some((w) => abbreviations.has(w)),
   });
@@ -284,19 +336,36 @@ async function applyRenames(
     if (!candidates.length) continue;
 
     const top = candidates[0];
-    if (project.advisor && top.confidence >= config.thresholds.suggest && top.confidence < config.thresholds.autoApply) {
-      const declSrc = binding.path.node.start != null && binding.path.node.end != null ? snippet(source.slice(binding.path.node.start, binding.path.node.end), 160) : undefined;
+    // Ask only when the answer can change the outcome: in SAFE mode nothing below 95% is applied
+    // anyway. Otherwise ask whenever local analysis is not fully sure (it may also veto a 80-94% rename).
+    const canMatter = threshold < config.thresholds.autoApply;
+    if (project.advisor && canMatter && (!top || top.confidence < config.thresholds.autoApply)) {
+      const node = binding.path.node;
+      const declSrc = node.start != null && node.end != null ? snippet(source.slice(node.start, node.end), 240) : undefined;
+      const usages = binding.referencePaths.slice(0, 4).map((r) => {
+        const st = r.getStatementParent()?.node;
+        return st?.start != null && st.end != null ? snippet(source.slice(st.start, st.end), 160) : '';
+      }).filter(Boolean);
+      const fnParent = binding.path.getFunctionParent();
+      const fnName = fnParent && (fnParent.isFunctionDeclaration() && fnParent.node.id ? fnParent.node.id.name : undefined) || undefined;
+      const cacheKey = `${file}:${oldName}:${target.loc.line}:${target.loc.column}`;
+      const cache = adviceCache.get(project) ?? adviceCache.set(project, new Map()).get(project)!;
       try {
-        const advice = await project.advisor.adviseName({
+        const advice = cache.has(cacheKey) ? cache.get(cacheKey)! : await project.advisor.adviseName({
           file,
           kind: subject.kind,
           currentName: oldName,
           valueType: subject.valueType,
           context: declSrc,
+          usages,
+          enclosingFunction: fnName,
           candidates: candidates.filter((c) => c.usable).slice(0, 5).map((c) => ({ name: c.name, score: c.score, evidence: c.evidence })),
           vocabulary: project.naming.vocabulary.entries.slice(0, 25).map((e) => e.word),
+          convention: project.conventionNote,
+          language: project.language,
         });
-        candidates = applyAdvice(candidates, advice, config.thresholds);
+        cache.set(cacheKey, advice);
+        candidates = withProposal(applyAdvice(candidates, advice, config.thresholds), advice, subject, config.thresholds, config.namingWeights);
       } catch {
         /* advisor failures never block local analysis */
       }
@@ -309,13 +378,17 @@ async function applyRenames(
       binding.scope.rename(oldName, c.name);
       applied = true;
       res.renamed++;
+      if (binding.scope.path.isProgram() && ast.program.sourceType !== 'module') {
+        res.globalNames.add(`global:${oldName}`);
+        res.globalNames.add(`global:${c.name}`);
+      }
       const cls = classifyConfidence(c.confidence, config.thresholds);
       res.changes.push({
         file,
         kind: 'rename',
         ruleId: 'rename-variable',
         level: cls === 'auto' ? 'safe' : 'cautious',
-        description: `Renamed ${subject.kind} "${oldName}" → "${c.name}"`,
+        description: `Renamed ${subject.kind} "${oldName}" → "${c.name}"${binding.scope.path.isProgram() && ast.program.sourceType !== 'module' ? ' (global; no other file references it)' : ''}`,
         loc: target.loc,
         before: oldName,
         after: c.name,

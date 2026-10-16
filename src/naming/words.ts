@@ -89,8 +89,18 @@ export const RESERVED_WORDS = new Set([
   'public', 'await', 'async', 'arguments', 'eval', 'undefined', 'NaN', 'Infinity', 'of', 'type', 'as',
 ]);
 
+/** Abbreviations that are close to universal in programming. Only used when the project does not spell them out itself. */
+export const COMMON_ABBREVIATIONS: Record<string, string> = {
+  cnt: 'count', idx: 'index', btn: 'button', msg: 'message', elem: 'element', err: 'error', cb: 'callback',
+  ctx: 'context', cfg: 'config', conf: 'config', req: 'request', resp: 'response', doc: 'document', img: 'image',
+  len: 'length', pos: 'position', sel: 'selector', cur: 'current', prev: 'previous', calc: 'calculate', tmp: 'temp',
+  num: 'number', str: 'string', obj: 'object', arr: 'array', val: 'value', res: 'result', ret: 'result', dat: 'data',
+  usr: 'user', pwd: 'password', addr: 'address', info: 'info', param: 'parameter', params: 'parameters', args: 'arguments',
+  e: 'event', evt: 'event', ev: 'event', el: 'element', fn: 'handler', func: 'handler',
+};
+
 export function isValidIdentifier(name: string): boolean {
-  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) && !RESERVED_WORDS.has(name);
+  return /^[\p{ID_Start}_$][\p{ID_Continue}$]*$/u.test(name) && !RESERVED_WORDS.has(name);
 }
 
 /** Names that carry (almost) no meaning on their own. */

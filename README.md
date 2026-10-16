@@ -20,7 +20,7 @@ Project → Scanner → Language Detection → Parser → AST/CST → Semantic A
 
 ブラウザだけで動く静的サイト版があります。**コードはサーバーに送信されず、すべてお使いのブラウザ内 (Web Worker) で処理されます。**
 ZIP またはフォルダをドロップ → Mode を選択 → REFINE → レポート表示 / ZIP 書き出し / (対応ブラウザでは) フォルダへ保存。
-AI Advisor を使う場合のみ、自分の Anthropic API キーを入力します (メモリ上にだけ保持。変数名と小さな断片だけを Anthropic に送ります)。
+AI Advisor を使う場合のみ、プロバイダ (Anthropic / OpenAI / Google Gemini / ローカル LLM) を選んで自分の API キーを入力します (メモリ上にだけ保持。変数名と小さなコード断片だけをプロバイダに送ります)。UI は日本語 / English を切り替えられます (ブラウザの言語で自動選択)。
 
 ```bash
 npm run build:web      # ./site に静的サイトを生成
@@ -66,7 +66,11 @@ node dist/cli.js ui                       # http://127.0.0.1:4173/
 |---|---|
 | `-m, --mode safe\|cautious\|aggressive` | リファクタリングレベル (既定: `safe`) |
 | `-c, --config <file>` | JSON 設定ファイル (`coderefiner.config.example.json` 参照) |
-| `--ai` | AI Advisor を有効化 (`ANTHROPIC_API_KEY` が必要。無ければ警告のうえローカルのみで続行) |
+| `--ai` | AI Advisor を有効化 (キーが無ければ警告のうえローカル解析のみで続行) |
+| `--ai-provider anthropic\|openai\|gemini\|local` | AI の提供元。キーは `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` (または `GOOGLE_API_KEY`) から読みます。`local` は OpenAI 互換サーバ (Ollama / LM Studio / llama.cpp / vLLM) でキー不要 |
+| `--ai-model <name>` | モデル名 (既定: `claude-haiku-5-5` / `gpt-4o-mini` / `gemini-2.0-flash` / `llama3.2`) |
+| `--ai-base-url <url>` | API の URL (local の既定: `http://localhost:11434/v1`) |
+| `--lang en\|ja` | レポートとメッセージの言語 (既定: 環境の `LANG` から自動) |
 | `--no-rename` | 変数のリネームをしない |
 | `--remove-unused` | 未使用 import / 到達不能コード / 副作用のない未使用ローカルを削除 (cautious 以上) |
 | `--no-validate` | 検証を無効化 (非推奨) |
@@ -93,9 +97,9 @@ tree-sitter 系の言語は WebAssembly パーサで構文を検証します。�
 
 | レベル | 意味 | 例 |
 |---|---|---|
-| **SAFE** (既定) | 意味変更の可能性が極めて低いもの | 真偽値が明らかな `if/else return true/false` の簡略化、`!!` の除去 (条件式内)、`else { if }` → `else if`、直後に return されるだけの一時変数のインライン化、重複 import の統合、重複宣言の削除 (CSS)、冗長な `type="text/javascript"` の削除、確信度 95% 以上のリネーム |
-| **CAUTIOUS** | 意味的な推測を伴うもの | `Boolean(x)` を使った return 簡略化、else-after-return、`var` → `const/let` (スコープが変わらない場合のみ)、import 並べ替え、空の CSS ルール削除、確信度 80% 以上のリネーム、(`--remove-unused` で) 未使用 import / 到達不能コードの削除 |
-| **AGGRESSIVE** | 構造変更を伴うもの | `function(){}` コールバック → アロー関数 (`this` / `arguments` 不使用時)、(`--remove-unused` で) 副作用のない未使用ローカル・関数の削除 |
+| **SAFE** (既定) | 意味変更の可能性が極めて低いもの | 再代入されない `let` → `const`、真偽値が明らかな `if/else return true/false` の簡略化、`!!` の除去 (条件式内)、`else { if }` → `else if`、直後に return されるだけの一時変数のインライン化、重複 import の統合、重複宣言の削除 (CSS)、冗長な `type="text/javascript"` の削除、確信度 95% 以上のリネーム |
+| **CAUTIOUS** | 意味的な推測を伴うもの | `Boolean(x)` を使った return 簡略化、else-after-return、`var` → `const/let` (スコープが変わらない場合のみ)、文字列連結 → テンプレートリテラル (確実に文字列連結のものだけ)、import 並べ替え、空の CSS ルール削除、確信度 80% 以上のリネーム、(`--remove-unused` で) 未使用 import / 到達不能コードの削除 |
+| **AGGRESSIVE** | 構造変更を伴うもの | インデックス `for` ループ → `for…of` (要素名をコレクション名から決定。添字の他用途・配列の変更・クロージャ捕捉があれば変換しない)、他から参照されないクラシックスクリプトのグローバル変数・関数の `const` 化とリネーム、`function(){}` コールバック → アロー関数 (`this` / `arguments` 不使用時)、(`--remove-unused` で) 副作用のない未使用ローカル・関数の削除 |
 
 `code-refiner rules` で全ルールを確認できます。
 
@@ -109,13 +113,45 @@ tree-sitter 系の言語は WebAssembly パーサで構文を検証します。�
 4. **Project Vocabulary** — プロジェクト全体の頻出語・表記揺れ (`station / stations / stationData / stn`)・略語 (`stn → station`) を収集し、レポートに出力します。
 5. **Naming Convention Detection** — 既存コードから `Collection → xxxList` か `plural noun` か、camelCase / snake_case、真偽値の `is/has` 接頭辞を推測し、新しい名前の生成に反映します。
 
-リネームは必ず**スコープ解析で局所的と証明できる場合だけ**行います。次は変更しません: export されている名前、クラシックスクリプトのグローバル (他ファイル・HTML から参照され得る)、HTML のインラインハンドラが参照する名前、`eval` / `with` を含むファイル、既存名・ネストしたスコープ・グローバル参照との衝突。
+名前の根拠になる情報は、データの流れ (`stations.filter(s => s.active)` → `activeStations`)、`for…of` / コールバックの要素 (`station`)、DOM の id (`getElementById('todo-list')` → `todoList`、`.value` → `todoInputValue`)、`innerHTML` に流れ込む文字列 (`html`)、イベント配線 (`addEventListener('click', f1)` → `handleAddButtonClick`)、`innerHTML` を書き換える関数 (`renderTodoList`)、手書きの絞り込みループ (`if (todo.done) res.push(todo)` → `doneTodos`)、`addTodo()` が作って返すオブジェクト (`todo`)、全呼び出し元が渡す引数名、`cnt → count` のような略語展開、プロジェクト固有の略語です。関数名・変数名・引数名が対象で、1 回目のリネーム結果を 2 回目の解析が使います (`x` → `activeStations` → ループ変数 `activeStation`)。
+
+リネームは必ず**スコープ解析で局所的と証明できる場合だけ**行います。次は変更しません: export されている名前、HTML のインラインハンドラが参照する名前、`eval` / `with` を含むファイル、既存名・ネストしたスコープ・グローバル参照との衝突。
+クラシックスクリプトのトップレベル名 (グローバル) は他のファイルや HTML から参照され得るため、**SAFE / CAUTIOUS では変更しません**。AGGRESSIVE (または設定 `renameGlobals: "unreferenced"`) では、**他のどのファイル・インラインハンドラ・`window.x` / `window[...]` からも参照されていないと確認できたものだけ**を対象にします (単体の JS ファイルを読み込んだときはこの判定で対象になります。外部から使われるライブラリの場合は `renameGlobals: "never"` にしてください)。
 
 ### AI Advisor (オプション)
 
-ローカル解析で候補とスコアを出し、**確信度が `suggest` 以上 `autoApply` 未満の曖昧なものだけ**を、必要最小限の文脈 (変数名・型・初期化式の断片・候補名・語彙) でAIに尋ねます。AI は**ローカル候補の中から選ぶか、拒否権を行使する**ことしかできず (+5 点まで)、新しい名前は作れません。選択後も衝突チェック等のローカル安全確認と確信度判定が走ります。
+ローカル解析で決め切れない名前 (確信度が `autoApply` 未満で、SAFE 以外のモード) についてだけ、必要最小限の文脈 (宣言・数箇所の使用例・候補名・プロジェクト語彙と命名規則・囲む関数名) を AI に尋ねます。ファイル全体は送りません。
 
-## 安全性の仕組み
+| プロバイダ | 設定 | キー |
+|---|---|---|
+| Anthropic (Claude) | `ai.provider: "anthropic"` | `ANTHROPIC_API_KEY` |
+| OpenAI | `"openai"` | `OPENAI_API_KEY` |
+| Google Gemini | `"gemini"` | `GEMINI_API_KEY` / `GOOGLE_API_KEY` |
+| **ローカル LLM** | `"local"` (OpenAI 互換: Ollama, LM Studio, llama.cpp server, vLLM …) | 不要 (`LOCAL_LLM_API_KEY` で任意指定) |
+
+```bash
+# OpenAI
+OPENAI_API_KEY=sk-... code-refiner ./app --mode cautious --ai-provider openai
+# Gemini
+GEMINI_API_KEY=... code-refiner ./app --mode cautious --ai-provider gemini --ai-model gemini-2.0-flash
+# Ollama (キー不要)
+ollama pull qwen2.5-coder && code-refiner ./app --mode cautious --ai-provider local --ai-model qwen2.5-coder
+# LM Studio
+code-refiner ./app --ai-provider local --ai-base-url http://localhost:1234/v1 --ai-model <model>
+```
+
+Web 版からローカル LLM を使う場合は、ブラウザが直接アクセスするため**サーバ側で CORS を許可**してください (Ollama: `OLLAMA_ORIGINS=*`)。
+
+AI にできること: ①ローカル候補から選ぶ (+5 点)、②「どれも違う」と拒否する (推奨未満に制限)、③**新しい名前を 1 つ提案する**。提案は有効な識別子であること・衝突しないこと・曖昧語でないことを確認したうえで**確信度 82% 上限の候補**として扱うため、SAFE モードでは適用されず、CAUTIOUS / AGGRESSIVE でもローカルの根拠付き候補が優先されます。AI が失敗・タイムアウトしても処理は止まりません。
+
+## 日本語対応
+
+- **UI・レポート・メッセージ**: Web 版 / ローカル UI は日本語 / English を切り替え可能 (ブラウザの言語で自動選択)。CLI は `--lang ja` (または `LANG=ja_JP.UTF-8`) で出力とレポートが日本語になります。`report.json` の内容は英語のままです。
+- **文字コード**: UTF-8 に加え **Shift_JIS (CP932) / EUC-JP / UTF-16** のファイルをそのまま扱い、**元の文字コードで書き戻します**。デコード→エンコードで元のバイト列が完全に復元できる場合だけ受け入れ、判定できないファイルは**変更せずコピー**します (文字化けさせません)。
+- **日本語の識別子・コメント・文字列**: そのまま保持します。日本語の識別子もリネーム候補の根拠 (`駅一覧.filter(...)` → `active駅一覧List` のように、複数形のない語には `List` を付けます) にでき、新しい名前は常に有効な識別子であることを確認します。
+- **AI の理由説明**は UI の言語に合わせて日本語で返します。
+
+## 安全性の仕組み## 安全性の仕組み
 
 - 各変換は **Parse → Transform → Parse again** で検証し、失敗した変換だけを巻き戻します (高速パスで失敗したら 1 ルールずつの隔離実行に切り替えます)。
 - 書式のみの変更は **AST 同値性** (引用符・括弧・プロパティキー表記を正規化) で、意味が変わっていないことを証明します。証明できなければ整形しません。
@@ -146,7 +182,7 @@ tree-sitter 系の言語は WebAssembly パーサで構文を検証します。�
 }
 ```
 
-`refactorDuplicates` は現状**検出・報告のみ**です (自動統合はしません)。そのほかのキー (`thresholds`, `namingWeights`, `complexity`, `ignore`, `omit`, `include`, `validationOptions`, `ai`, `languagePacks` …) は `coderefiner.config.example.json` を参照してください。
+`refactorDuplicates` は現状**検出・報告のみ**です (自動統合はしません)。`ai` (`provider` / `model` / `baseUrl`)、`language` (`auto` / `en` / `ja`)、`renameGlobals` (`auto` / `never` / `unreferenced`) も指定できます。そのほかのキー (`thresholds`, `namingWeights`, `complexity`, `ignore`, `omit`, `include`, `validationOptions`, `ai`, `languagePacks` …) は `coderefiner.config.example.json` を参照してください。
 
 ## アーキテクチャ
 
@@ -157,7 +193,8 @@ src/
 ├── naming/          Vocabulary / Convention / Candidate Generation / Scoring / Confidence
 ├── analysis/        Dead Code / Duplicate / Complexity / HTML-CSS-JS Cross Reference
 ├── validation/      構文・公開面・同値性・型チェック・build/test + Rollback
-├── ai/              AI Advisor インターフェースと Anthropic 実装 (オプション)
+├── ai/              AI Advisor (Anthropic / OpenAI / Gemini / ローカル LLM。オプション)
+├── i18n/            日本語 / English (メッセージ翻訳・言語判定)
 ├── report/          HTML レポート
 ├── languages/       Language Packs
 │   ├── javascript/  (Babel パーサ + recast プリンタ + Prettier)  ← typescript も同実装を共有
