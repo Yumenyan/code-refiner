@@ -31,7 +31,7 @@ function initialsMatch(current: string, head: string[]): boolean {
   const c = current.toLowerCase();
   if (c.length > 3 || head.length === 0) return false;
   const w = head.join('');
-  return /^[a-z]+$/.test(c) && (w.startsWith(c) || head.map((x) => x[0]).join('') === c);
+  return /^[a-z]+$/.test(c) && (w.startsWith(c) || head.map((x) => x[0]).join('') === c || head[head.length - 1].startsWith(c));
 }
 
 interface Scored {
@@ -187,6 +187,7 @@ export function applyAdvice(
       chosen.score = Math.min(100, chosen.score + 5);
       chosen.confidence = chosen.score / 100;
       chosen.evidence.push(`AI advisor agrees (+5)${advice.rationale ? ': ' + advice.rationale : ''}`);
+      chosen.ai = true;
     }
   }
   return out.sort((a, b) => b.score - a.score || (a.name < b.name ? -1 : 1));
@@ -213,6 +214,6 @@ export function withProposal(candidates: NameCandidate[], advice: NamingAdvice |
   }
   const score = Math.min(Math.round(t.recommend * 100) + 2, Math.round(t.autoApply * 100) - 1);
   void w;
-  const cand: NameCandidate = { name, score, confidence: score / 100, evidence, usable, rejectedReason };
+  const cand: NameCandidate = { name, score, confidence: score / 100, evidence, usable, rejectedReason, ai: true };
   return [...candidates, cand].sort((a, b) => b.score - a.score || (a.name < b.name ? -1 : 1));
 }

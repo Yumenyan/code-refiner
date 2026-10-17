@@ -17,7 +17,8 @@ export interface EcmaRuleContext {
   allowGlobal?: (name: string) => boolean;
 }
 
-export type EcmaRule = Rule<t.File, EcmaRuleContext>;
+/** `since`: the ECMAScript edition whose syntax the rule's output needs (rules above the project's target are skipped). */
+export type EcmaRule = Rule<t.File, EcmaRuleContext> & { since?: number };
 
 const loc = (n: t.Node) => ({ line: n.loc?.start.line ?? 0, column: (n.loc?.start.column ?? 0) + 1 });
 const text = (ctx: EcmaRuleContext, n: t.Node) => (n.start != null && n.end != null ? snippet(ctx.source.slice(n.start, n.end), 100) : undefined);
@@ -249,6 +250,7 @@ export const removeEmptyStatements: EcmaRule = {
 };
 
 export const mergeDuplicateImports: EcmaRule = {
+  since: 2015,
   id: 'merge-duplicate-imports',
   description: "import {a} from 'x'; import {b} from 'x';  ->  import {a, b} from 'x';",
   level: 'safe',
@@ -298,6 +300,7 @@ export const mergeDuplicateImports: EcmaRule = {
 };
 
 export const sortImports: EcmaRule = {
+  since: 2015,
   id: 'sort-imports',
   description: 'Orders the leading import block: packages first, then relative paths, alphabetically',
   level: 'cautious',
@@ -318,6 +321,7 @@ export const sortImports: EcmaRule = {
 };
 
 export const varToLetConst: EcmaRule = {
+  since: 2015,
   id: 'var-to-let-const',
   description: 'var -> const/let when the variable is only used inside its block after its declaration',
   level: 'cautious',
@@ -366,6 +370,7 @@ export const varToLetConst: EcmaRule = {
 };
 
 export const functionToArrow: EcmaRule = {
+  since: 2015,
   id: 'callback-to-arrow',
   description: 'function () {...} callbacks -> arrow functions when `this`/`arguments` are not used',
   level: 'aggressive',
@@ -512,6 +517,7 @@ export const removeUnusedLocals: EcmaRule = {
 
 
 export const letToConst: EcmaRule = {
+  since: 2015,
   id: 'let-to-const',
   description: 'let -> const when the variable is never reassigned',
   level: 'safe',
@@ -543,6 +549,7 @@ function escapeTemplate(s: string): string {
 }
 
 export const templateLiterals: EcmaRule = {
+  since: 2015,
   id: 'concat-to-template',
   description: "'a' + x + 'b'  ->  `a${x}b`  (only chains that are certainly string concatenations)",
   level: 'cautious',
@@ -604,6 +611,7 @@ function sameSimpleExpr(a: t.Node, b: t.Node): boolean {
 }
 
 export const forIndexToForOf: EcmaRule = {
+  since: 2015,
   id: 'for-index-to-for-of',
   description: 'for (var i = 0; i < xs.length; i++) { ... xs[i] ... }  ->  for (const x of xs) { ... x ... }',
   level: 'aggressive',

@@ -1,4 +1,5 @@
 import type { RefactorLevel } from './types.js';
+import { parseEcmaTarget } from './targets.js';
 
 export interface NamingWeights {
   sourceMatch: number;
@@ -81,6 +82,24 @@ export interface Config {
    * `window.x` access mentions. `auto` (default): `unreferenced` in aggressive mode, `never` otherwise.
    */
   renameGlobals: 'auto' | 'never' | 'unreferenced';
+  /**
+   * Maximum language level per language id, e.g. `{ "javascript": "es5" }` or `"rhino"` (old Rhino engine:
+   * ES5 syntax only, no trailing commas). Rules that would introduce newer syntax are switched off.
+   * Rust: the edition passed to rustfmt (`2015` | `2018` | `2021` | `2024`).
+   */
+  target: Record<string, string>;
+  /** Treat files with these extensions as another language, e.g. `{ ".rhino": "javascript", ".gs": "javascript" }`. */
+  languageMap: Record<string, string>;
+  /**
+   * For files whose extension no Language Pack knows: look at the content (shebang, keywords, a parse
+   * attempt) and refactor them as the best matching language anyway.
+   */
+  detectLanguageByContent: boolean;
+  /**
+   * Score an AI-suggested name must reach to be applied, in *every* mode (AI names are validated locally
+   * and capped at recommend+2%). Set it above 1 to only ever report AI suggestions.
+   */
+  aiApplyThreshold: number;
   /** Language of the report and messages. `auto` follows the environment. */
   language: 'auto' | 'en' | 'ja';
   /** Paths/modules of external Language Packs to load. */
@@ -119,6 +138,10 @@ export const DEFAULT_CONFIG: Config = {
   validationOptions: { typecheck: true, runCommands: false, commandTimeoutMs: 120_000 },
   ai: { provider: 'anthropic', model: '', apiKeyEnv: '', baseUrl: '', timeoutMs: 30_000 },
   renameGlobals: 'auto',
+  target: {},
+  languageMap: {},
+  detectLanguageByContent: false,
+  aiApplyThreshold: 0.8,
   language: 'auto',
   languagePacks: [],
 };
@@ -153,6 +176,19 @@ export function validateConfig(c: Config): Config {
     throw new ConfigError(`ai.provider must be anthropic | openai | gemini | local (got "${c.ai.provider}")`);
   }
   if (!['auto', 'never', 'unreferenced'].includes(c.renameGlobals)) throw new ConfigError('renameGlobals must be auto | never | unreferenced');
+  for (const [lang, t] of Object.entries(c.target)) {
+    if (['javascript', 'typescript'].includes(lang)) {
+      try {
+        parseEcmaTarget(t);
+      } catch (e) {
+        throw new ConfigError((e as Error).message);
+      }
+    }
+  }
+  for (const [ext, lang] of Object.entries(c.languageMap)) {
+    if (!ext.startsWith('.') || typeof lang !== 'string') throw new ConfigError(`languageMap keys must look like ".ext" (got "${ext}")`);
+  }
+  if (typeof c.aiApplyThreshold !== 'number' || c.aiApplyThreshold < 0) throw new ConfigError('aiApplyThreshold must be a number >= 0');
   if (!['auto', 'en', 'ja'].includes(c.language)) throw new ConfigError('language must be auto | en | ja');
   for (const key of ['ignore', 'omit', 'include', 'languagePacks'] as const) {
     if (!Array.isArray(c[key]) || c[key].some((x) => typeof x !== 'string')) {
@@ -160,6 +196,11 @@ export function validateConfig(c: Config): Config {
     }
   }
   return c;
+}
+
+/** Deep-merges config fragments (later wins). Nested objects such as `thresholds` merge key by key. */
+export function mergeConfigs(...parts: unknown[]): Record<string, unknown> {
+  return parts.reduce<Record<string, unknown>>((acc, p) => merge(acc, p), {});
 }
 
 export function resolveConfig(partial: unknown = {}): Config {

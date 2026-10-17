@@ -248,3 +248,11 @@ UPDATE_GOLDEN=1 npx vitest run tests/golden.test.ts   # ゴールデンの意図
 - Prettier の既定に近い書式で出力します。インデント (タブ/2/4)・引用符・`printWidth` は入力から推定し、プロジェクトの `.prettierrc` (JSON) があれば優先します。
 - 型チェックは TypeScript のみ。JS の `checkJs` は対象外です。`node_modules` はコピーされないため、解決できない import による診断は変換前後で相殺されます。
 - 解析 (未使用コード・重複・複雑度) の行番号は**元ファイル**のものです。
+
+## 言語拡張・しきい値・言語レベル(追加機能)
+
+- **Rust / Java / C# / Go / Python**: tree-sitter ベースで、安全な規則(rules)・識別子のリネーム(トークン列一致で証明)・整形を実行します。他の tree-sitter 言語は整形(レイアウト)のみです。
+- **拡張子が違うファイル**: `--map ".ext=javascript"` / 設定 `languageMap` で拡張子→言語を指定、`--sniff`(`detectLanguageByContent`)で内容から言語を推定して処理します。
+- **言語レベル**: `--target es3|es5|rhino|es2015|…|latest`(Rust は edition)。Rhino/ES5 では let/const・テンプレートリテラル・for-of 等を生成しません。
+- **しきい値**: `--threshold apply=0.8`、`--weight <name>=<n>`、`--set path=value`、設定 `thresholds` / `namingWeights` / `renameApplyThreshold` / `aiApplyThreshold`。AI 提案は全モードで `aiApplyThreshold` 以上なら適用されます。
+- **Web 版**: 「詳細設定」でレベル・しきい値・言語マップ・JSON 設定を指定できます。入力欄/日本語切替の不具合(file:// でのモジュール読込)を修正しました。

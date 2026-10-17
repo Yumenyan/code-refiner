@@ -20,7 +20,15 @@ go.addEventListener('click', async () => {
   ui.say(ui.t('refining'));
   const mode = (document.querySelector('input[name=mode]:checked') as HTMLInputElement).value;
   const ai = ui.ai();
+  let advanced: Record<string, unknown>;
+  try {
+    advanced = ui.advanced();
+  } catch (e) {
+    go.disabled = false;
+    return ui.say((e as Error).message, true);
+  }
   const q = new URLSearchParams({ mode, name: picked.name, lang: ui.lang, removeUnused: $<HTMLInputElement>('removeUnused').checked ? '1' : '0' });
+  if (Object.keys(advanced).length) q.set('cfg', JSON.stringify(advanced));
   if (ai.enabled) {
     q.set('ai', '1');
     q.set('provider', ai.provider);

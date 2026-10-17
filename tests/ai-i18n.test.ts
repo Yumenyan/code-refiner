@@ -97,9 +97,13 @@ describe('AI proposals pass through the same local safety net', () => {
     const r = await refineProject(memProject({ 'a.js': src }), { mode: 'cautious', aiAdvisor: true, renameVariables: true }, { advisor: mock('itemIds') });
     expect(text(r as never, 'a.js')).toContain('itemIds');
   });
-  it('SAFE mode never applies an AI proposal', async () => {
-    const r = await refineProject(memProject({ 'a.js': 'export function f(items) { const q = items.filter(Boolean); return q.length + q.length; }\n' }), { mode: 'safe', aiAdvisor: true }, { advisor: mock('truthyItems') });
-    expect(text(r as never, 'a.js')).toContain('const q');
+  it('AI names are applied at aiApplyThreshold in every mode (SAFE included) and can be switched to report-only', async () => {
+    const safeSrc = 'export function f(items) { const q = items.filter(Boolean); return q.length + q.length; }\n';
+    const applied = await refineProject(memProject({ 'a.js': safeSrc }), { mode: 'safe', aiAdvisor: true }, { advisor: mock('truthyItems') });
+    expect(text(applied as never, 'a.js')).toContain('truthyItems');
+    const reportOnly = await refineProject(memProject({ 'a.js': safeSrc }), { mode: 'safe', aiAdvisor: true, aiApplyThreshold: 2 }, { advisor: mock('truthyItems') });
+    expect(text(reportOnly as never, 'a.js')).toContain('const q');
+    expect(reportOnly.suggestions.some((s) => s.candidates?.some((c) => c.name === 'truthyItems' && c.ai))).toBe(true);
   });
   it('rejects colliding, reserved or ambiguous proposals', async () => {
     for (const bad of ['items', 'class', 'data', 'not valid']) {

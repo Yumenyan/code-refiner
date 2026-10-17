@@ -29,7 +29,13 @@ export function wordsOfExpression(node: t.Node | null | undefined): { words: str
     // keep naming of the chain root: stations.filter(...).map(...) -> stations
     return wordsOfExpression(node.callee.object);
   }
-  if (!name || isPoorName(name)) return null;
+  if (!name) return null;
+  return wordsOfIdentifierName(name);
+}
+
+/** `stationList` -> station (plural), `activeStations` -> active station (plural): the noun phrase a name stands for. */
+export function wordsOfIdentifierName(name: string): { words: string[]; plural: boolean } | null {
+  if (isPoorName(name)) return null;
   const ws = splitWords(name);
   if (!ws.length) return null;
   // Strip generic collection suffixes: stationList -> station(s)

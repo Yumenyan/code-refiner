@@ -79,6 +79,8 @@ export interface NameCandidate {
   evidence: string[];
   usable: boolean;
   rejectedReason?: string;
+  /** Chosen or proposed by the AI Advisor (applied at `aiApplyThreshold`). */
+  ai?: boolean;
 }
 
 export interface Suggestion {

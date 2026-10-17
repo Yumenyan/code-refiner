@@ -26,6 +26,14 @@ Options:
       --ai-model <name>    model name (defaults: claude-haiku-5-5 / gpt-4o-mini / gemini-2.0-flash / llama3.2)
       --ai-base-url <url>  API endpoint (local default: http://localhost:11434/v1)
       --lang <en|ja>       language of the report and messages (default: from LANG)
+      --target <lang=level>  maximum language level, repeatable / comma separated:
+                           javascript=es5 | rhino | es2015 ... latest   rust=2021
+                           (a bare "es5" or "rhino" applies to JavaScript and TypeScript)
+      --map <.ext=lang>    treat an extension as another language, e.g. --map .rhino=javascript,.gs=javascript
+      --sniff              refactor files with unknown extensions by detecting their language from the content
+      --threshold <name=value>  confidence thresholds (0-1): apply (renames), auto, recommend, suggest, ai
+      --weight <key=value> naming score weights, e.g. --weight sourceMatch=40 (repeatable)
+      --set <path=json>    set any config value, e.g. --set complexity.maxNesting=3 (repeatable)
       --no-rename          do not rename variables
       --remove-unused      remove unused imports / unreachable code / pure unused locals (cautious+)
       --no-validate        skip validation (not recommended)
@@ -42,12 +50,17 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const flags = new Map<string, string | true>();
   const positional: string[] = [];
-  const withValue = new Set(['out', 'o', 'mode', 'm', 'config', 'c', 'port', 'ai-provider', 'ai-model', 'ai-base-url', 'lang']);
+  const withValue = new Set(['out', 'o', 'mode', 'm', 'config', 'c', 'port', 'ai-provider', 'ai-model', 'ai-base-url', 'lang', 'target', 'map', 'threshold', 'weight', 'set']);
+  const repeatable = new Set(['target', 'map', 'threshold', 'weight', 'set']);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith('--') || (a.startsWith('-') && a.length === 2)) {
       const key = a.replace(/^-+/, '');
-      if (withValue.has(key)) flags.set(key, argv[++i] ?? '');
+      if (withValue.has(key)) {
+        const v = argv[++i] ?? '';
+        const prev = flags.get(key);
+        flags.set(key, repeatable.has(key) && typeof prev === 'string' ? `${prev}\u0000${v}` : v);
+      }
       else flags.set(key, true);
     } else positional.push(a);
   }
@@ -105,7 +118,68 @@ async function main(): Promise<number> {
   if (flag(args, 'remove-unused')) overrides.removeUnused = true;
   if (flag(args, 'no-validate')) overrides.validation = false;
   if (flag(args, 'run-commands')) overrides.validationOptions = { ...base.validationOptions, runCommands: true };
-  const config = resolveConfig({ ...base, ...overrides });
+  const repeated = (name: string): string[] => {
+    const v = flag(args, name);
+    return typeof v === 'string' ? v.split('\u0000').flatMap((x) => x.split(',')).map((x) => x.trim()).filter(Boolean) : [];
+  };
+  const pair = (item: string): [string, string] => {
+    const i = item.indexOf('=');
+    if (i < 1) throw new ConfigError(`expected name=value, got "${item}"`);
+    return [item.slice(0, i).trim(), item.slice(i + 1).trim()];
+  };
+  const targets: Record<string, string> = { ...base.target };
+  for (const item of repeated('target')) {
+    if (!item.includes('=')) {
+      targets.javascript = item;
+      targets.typescript = item;
+    } else {
+      const [k, v] = pair(item);
+      targets[k] = v;
+    }
+  }
+  if (Object.keys(targets).length) overrides.target = targets;
+  const map: Record<string, string> = { ...base.languageMap };
+  for (const item of repeated('map')) {
+    const [k, v] = pair(item);
+    map[k.startsWith('.') ? k : `.${k}`] = v;
+  }
+  if (Object.keys(map).length) overrides.languageMap = map;
+  if (flag(args, 'sniff')) overrides.detectLanguageByContent = true;
+  const thresholds = { ...base.thresholds };
+  for (const item of repeated('threshold')) {
+    const [k, v] = pair(item);
+    const n = Number(v);
+    if (!Number.isFinite(n)) throw new ConfigError(`threshold ${k}: "${v}" is not a number`);
+    if (k === 'apply') overrides.renameApplyThreshold = n;
+    else if (k === 'ai') overrides.aiApplyThreshold = n;
+    else if (k === 'auto') thresholds.autoApply = n;
+    else if (k === 'recommend' || k === 'suggest') thresholds[k] = n;
+    else throw new ConfigError(`unknown threshold "${k}" (apply | auto | recommend | suggest | ai)`);
+  }
+  overrides.thresholds = thresholds;
+  const weights = { ...base.namingWeights };
+  for (const item of repeated('weight')) {
+    const [k, v] = pair(item);
+    if (!(k in weights)) throw new ConfigError(`unknown weight "${k}" (${Object.keys(weights).join(', ')})`);
+    (weights as Record<string, number>)[k] = Number(v);
+  }
+  overrides.namingWeights = weights;
+  let merged: Record<string, unknown> = { ...base, ...overrides } as Record<string, unknown>;
+  for (const item of repeated('set')) {
+    const [path, raw] = pair(item);
+    let value: unknown = raw;
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      /* plain string */
+    }
+    const keys = path.split('.');
+    merged = structuredClone(merged);
+    let node = merged;
+    for (const k of keys.slice(0, -1)) node = (node[k] ??= {}) as Record<string, unknown>;
+    node[keys[keys.length - 1]] = value;
+  }
+  const config = resolveConfig(merged);
 
   if (cmd === 'ui') {
     const port = Number(flag(args, 'port') ?? 4173);

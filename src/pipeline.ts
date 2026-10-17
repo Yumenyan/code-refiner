@@ -10,6 +10,8 @@ import { detectMetadata } from './core/metadata.js';
 import { canEncode, copyableFiles, decodeText, encodeText } from './core/scanner.js';
 import type { TextEncoding } from './core/encoding.js';
 import type { Change, Project, ProjectFile, ProjectMetadata, Suggestion, Warning } from './core/types.js';
+import { sniffLanguage, mightBeSource } from './languages/sniff.js';
+import { extname, basename } from './core/text.js';
 import { createRegistry, type LanguageRegistry, type LanguagePack } from './languages/index.js';
 import type { ProjectContext, RefineOutput } from './languages/types.js';
 import { classifyConfidence, namingContextFrom } from './naming/engine.js';
@@ -154,14 +156,27 @@ export async function refineProject(project: Project, configInput: Partial<Confi
   const boms = new Map<string, boolean>();
   const encodings = new Map<string, TextEncoding>();
   const analyzable: ProjectFile[] = [];
+  const packs = new Map<string, LanguagePack>();
+  const langMap = Object.fromEntries(Object.entries(config.languageMap).map(([k, v]) => [k.toLowerCase(), v]));
   for (const f of project.files) {
     if (f.omitted || !f.data || f.ignored || f.kind === 'binary') continue;
-    const pack = registry.forFile(f.path);
     const { text, bom, encoding } = decoder(f);
     texts.set(f.path, text);
     boms.set(f.path, bom);
     encodings.set(f.path, encoding);
-    if (pack) analyzable.push(f);
+    // 1. explicit mapping (".rhino" -> javascript)  2. the extension  3. optionally the content
+    const mappedId = langMap[extname(f.path)] ?? langMap[basename(f.path).toLowerCase()];
+    let pack = mappedId ? registry.get(mappedId) : registry.forFile(f.path);
+    if (mappedId && !pack) warnings.push({ code: 'language-map', file: f.path, message: `languageMap: no Language Pack "${mappedId}" for ${f.path}` });
+    if (!pack && config.detectLanguageByContent && mightBeSource(f.path)) {
+      pack = await sniffLanguage(f.path, text, registry);
+      if (pack) warnings.push({ code: 'language-sniffed', file: f.path, message: `Detected as ${pack.displayName} from its content; refactoring it as such` });
+    }
+    if (pack) {
+      packs.set(f.path, pack);
+      analyzable.push(f);
+      if (f.language !== pack.id) f.language = pack.id;
+    }
   }
   const textOf = (p: string) => texts.get(p) ?? (() => {
     const f = project.files.find((x) => x.path === p && x.data);
@@ -172,7 +187,7 @@ export async function refineProject(project: Project, configInput: Partial<Confi
 
   // ---- Phase 2/3: parse + semantic analysis --------------------------------------------------
   const models = new Map<string, FileModels>();
-  for (const pack of new Set(analyzable.map((f) => registry.forFile(f.path)!))) {
+  for (const pack of new Set(analyzable.map((f) => packs.get(f.path)!))) {
     try {
       await pack.init?.();
     } catch (e) {
@@ -180,7 +195,7 @@ export async function refineProject(project: Project, configInput: Partial<Confi
     }
   }
   for (const f of analyzable) {
-    const pack = registry.forFile(f.path)!;
+    const pack = packs.get(f.path)!;
     try {
       const m = pack.analyze?.({ file: f.path, source: texts.get(f.path)! });
       if (m && Object.keys(m).length) models.set(f.path, m);
@@ -264,7 +279,7 @@ export async function refineProject(project: Project, configInput: Partial<Confi
       fileResults.set(f.path, { path: f.path, status: 'binary', changes: 0 });
       continue;
     }
-    const pack = registry.forFile(f.path);
+    const pack = packs.get(f.path);
     if (!pack) {
       fileResults.set(f.path, { path: f.path, status: 'unsupported', language: f.language, changes: 0, note: f.language ? `no Language Pack for ${f.language}` : undefined });
       continue;

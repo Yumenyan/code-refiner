@@ -1,5 +1,6 @@
 import * as t from '@babel/types';
 import { renameApplyThreshold } from '../../core/config.js';
+import { SYNTAX_SINCE, ecmaLevel } from '../../core/targets.js';
 import { hitToChange, rulesFor } from '../../core/rule-engine.js';
 import type { Change, Suggestion, Warning } from '../../core/types.js';
 import { snippet } from '../../core/text.js';
@@ -54,6 +55,30 @@ export function surfaceOf(source: string, file: string, language: EcmaLanguage):
   return [...names].sort();
 }
 
+const ES3_RESERVED = new Set(['abstract', 'boolean', 'byte', 'char', 'double', 'final', 'float', 'goto', 'int', 'long', 'native', 'short', 'synchronized', 'throws', 'transient', 'volatile']);
+
+/** Reports syntax newer than the configured target; such code is left as it is. */
+function warnNewSyntax(ast: t.File, ecma: number, label: string, warn: (code: string, message: string) => void): void {
+  const seen = new Map<string, { since: number; line: number }>();
+  traverse(ast, {
+    enter(p) {
+      let hit = SYNTAX_SINCE[p.node.type];
+      const n = p.node as t.Node;
+      if (t.isVariableDeclaration(n) && n.kind !== 'var') hit = [2015, n.kind];
+      else if (t.isLogicalExpression(n, { operator: '??' })) hit = [2020, '?? operator'];
+      else if (t.isBinaryExpression(n, { operator: '**' })) hit = [2016, '** operator'];
+      else if (t.isObjectProperty(n) && n.shorthand) hit = [2015, 'shorthand property'];
+      else if (t.isObjectMethod(n) && n.kind === 'method') hit = [2015, 'method shorthand'];
+      else if ((t.isObjectProperty(n) || t.isObjectMethod(n)) && n.computed) hit = [2015, 'computed property'];
+      else if (t.isFunction(n) && (n.generator || n.async) && !hit) hit = n.generator ? [2015, 'generator'] : [2017, 'async function'];
+      if (hit && hit[0] > ecma && !seen.has(hit[1])) seen.set(hit[1], { since: hit[0], line: n.loc?.start.line ?? 0 });
+    },
+  });
+  for (const [what, v] of [...seen].slice(0, 8)) {
+    warn('target-syntax', `ES${v.since} syntax (${what}) at line ${v.line} is newer than the target ${label || 'ES' + ecma}; left as it is`);
+  }
+}
+
 function virtualName(file: string, embedded: RefineInput['embedded']): string {
   if (!embedded) return file;
   return embedded.isModule ? `${file}.inline.mjs` : `${file}.inline.js`;
@@ -100,6 +125,8 @@ export async function refineEcma(input: RefineInput, language: EcmaLanguage, for
     return out;
   }
   const isModule = baseAst.program.sourceType === 'module';
+  const ecma = ecmaLevel(config, language);
+  if (ecma < 9999) warnNewSyntax(baseAst, ecma, config.target[language] ?? config.target.javascript ?? '', warn);
   const hasJsx = detectJsx(baseAst);
   const originalSurface = surfaceOf(input.source, vfile, language);
   let current = input.source;
@@ -129,7 +156,8 @@ export async function refineEcma(input: RefineInput, language: EcmaLanguage, for
   };
 
   // ---- Refactoring rules (Parse -> Transform -> Parse again) ------------------------------
-  const rules = rulesFor(ECMA_RULES, config.mode);
+  // Rules whose output needs newer syntax than the target are skipped (e.g. no `const` / arrow for ES5 or Rhino).
+  const rules = rulesFor(ECMA_RULES, config.mode).filter((r) => !r.since || r.since <= ecma);
   const ctxFor = (src: string): EcmaRuleContext => ({ source: src, file, isModule, removeUnused: config.removeUnused, hasJsx, language, allowGlobal });
 
   // Fast path: every rule on one tree, one print, one verification. If anything looks wrong we
@@ -215,7 +243,7 @@ export async function refineEcma(input: RefineInput, language: EcmaLanguage, for
   // ---- Formatting ----------------------------------------------------------------------------
   if (!embedded) {
     try {
-      const formatted = await formatter.format(current, file);
+      const formatted = await formatter.format(current, file, { ecma });
       try {
         const a = parseEcma(current, vfile, language);
         const b = parseEcma(formatted, vfile, language);
@@ -336,10 +364,9 @@ async function applyRenamesOnce(
     if (!candidates.length) continue;
 
     const top = candidates[0];
-    // Ask only when the answer can change the outcome: in SAFE mode nothing below 95% is applied
-    // anyway. Otherwise ask whenever local analysis is not fully sure (it may also veto a 80-94% rename).
-    const canMatter = threshold < config.thresholds.autoApply;
-    if (project.advisor && canMatter && (!top || top.confidence < config.thresholds.autoApply)) {
+    // Ask whenever local analysis is not fully sure. AI-assisted names are applied at `aiApplyThreshold`
+    // in every mode, so enabling the advisor has a visible effect even in SAFE mode.
+    if (project.advisor && (!top || top.confidence < config.thresholds.autoApply)) {
       const node = binding.path.node;
       const declSrc = node.start != null && node.end != null ? snippet(source.slice(node.start, node.end), 240) : undefined;
       const usages = binding.referencePaths.slice(0, 4).map((r) => {
@@ -373,7 +400,9 @@ async function applyRenamesOnce(
 
     let applied = false;
     for (const c of candidates) {
-      if (!c.usable || c.confidence < threshold) continue;
+      const needed = c.ai ? Math.min(threshold, config.aiApplyThreshold) : threshold;
+      if (!c.usable || c.confidence < needed) continue;
+      if (ecmaLevel(config, 'javascript') < 5 && ES3_RESERVED.has(c.name)) continue;
       if (conflictsWith(binding, c.name, programScope)) continue;
       binding.scope.rename(oldName, c.name);
       applied = true;

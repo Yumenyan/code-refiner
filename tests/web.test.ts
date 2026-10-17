@@ -18,7 +18,12 @@ describe('Static web build (GitHub Pages)', () => {
     expect(worker).not.toMatch(/\bfrom\s*["']node:/);
     expect(worker).not.toMatch(/^import\s*["']node:/m);
     const html = await readFile(join(ROOT, 'site/index.html'), 'utf8');
-    expect(html).toContain('src="main.js"'); // relative: works under /<repo>/ on GitHub Pages
+    expect(html).toMatch(/<script src="main\.js\?v=\w+" defer><\/script>/); // relative + cache-busted: works under /<repo>/ on GitHub Pages
+    // a classic script: the UI (language switch, input fields) must not depend on module loading, which file:// blocks
+    expect(html).not.toContain('type="module"');
+    const main = await readFile(join(ROOT, 'site/main.js'), 'utf8');
+    expect(main).not.toMatch(/\bimport\.meta\b/);
+    expect(main).not.toMatch(/^import\s/m);
     expect(html).not.toMatch(/(src|href)="\//);
   }, 60_000);
 });

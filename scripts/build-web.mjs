@@ -13,11 +13,10 @@ const stub = join(root, 'src/web/stub.ts');
 await rm(out, { recursive: true, force: true });
 await mkdir(join(out, 'wasm'), { recursive: true });
 
-await build({
-  entryPoints: { worker: join(root, 'src/web/worker.ts'), main: join(root, 'src/web/main.ts') },
+const buildId = Date.now().toString(36);
+const common = {
   outdir: out,
   bundle: true,
-  format: 'esm',
   platform: 'browser',
   target: 'es2022',
   minify: true,
@@ -41,13 +40,18 @@ await build({
       },
     },
   ],
-  define: { 'process.env.NODE_ENV': '"production"', global: 'globalThis' },
-});
+  define: { 'process.env.NODE_ENV': '"production"', global: 'globalThis', __BUILD_ID__: JSON.stringify(buildId) },
+};
+
+// The UI is a classic (non-module) script: it keeps working when the page is opened from file:// or an
+// old browser, so the language switch and the input fields never silently die. Only the worker is a module.
+await build({ ...common, entryPoints: { main: join(root, 'src/web/main.ts') }, format: 'iife' });
+await build({ ...common, entryPoints: { worker: join(root, 'src/web/worker.ts') }, format: 'esm' });
 
 // The page markup is shared with the local UI: bundle it once, then render the static HTML.
 const markup = await build({ entryPoints: [join(root, 'src/ui/markup.ts')], bundle: true, format: 'esm', platform: 'neutral', write: false, logLevel: 'silent' });
 const { renderPageHtml } = await import(`data:text/javascript;base64,${Buffer.from(markup.outputFiles[0].text).toString('base64')}`);
-await writeFile(join(out, 'index.html'), renderPageHtml('web', '<script type="module" src="main.js"></script>'));
+await writeFile(join(out, 'index.html'), renderPageHtml('web', `<script src="main.js?v=${buildId}" defer></script>`));
 await writeFile(join(out, '.nojekyll'), '');
 
 const wasmDir = join(dirname(require.resolve('tree-sitter-wasms/package.json')), 'out');

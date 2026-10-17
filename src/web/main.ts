@@ -15,9 +15,22 @@ initPicker(ui, (p) => {
   ui.say('');
 });
 
-const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+declare const __BUILD_ID__: string;
+
+// Everything above works without the worker; if it cannot start, say why instead of failing silently.
+let worker: Worker | null = null;
+let workerError = '';
+if (location.protocol === 'file:') workerError = ui.t('fileProtocol');
+else {
+  try {
+    worker = new Worker(`worker.js?v=${__BUILD_ID__}`, { type: 'module' });
+  } catch (e) {
+    workerError = `${ui.t('noWorker')} (${(e as Error).message})`;
+  }
+}
+if (workerError) ui.say(workerError, true);
 let jobId = 0;
-worker.onmessage = (ev: MessageEvent<WorkerMessage>) => {
+if (worker) worker.onmessage = (ev: MessageEvent<WorkerMessage>) => {
   const m = ev.data;
   if (m.id !== jobId) return;
   if (m.type === 'log') return ui.say(ui.t('refiningWeb'));
@@ -42,11 +55,20 @@ worker.onmessage = (ev: MessageEvent<WorkerMessage>) => {
 
 go.addEventListener('click', () => {
   if (!picked) return;
+  if (!worker) return ui.say(workerError || ui.t('noWorker'), true);
   go.disabled = true;
   $('result').style.display = 'none';
   ui.say(ui.t('refiningWeb'));
   const mode = (document.querySelector('input[name=mode]:checked') as HTMLInputElement).value;
   const ai = ui.ai();
+  let advanced: Record<string, unknown>;
+  try {
+    advanced = ui.advanced();
+  } catch (e) {
+    go.disabled = false;
+    $('result').style.display = 'none';
+    return ui.say((e as Error).message, true);
+  }
   const req: WorkerRequest = {
     id: ++jobId,
     name: picked.name,
@@ -58,6 +80,7 @@ go.addEventListener('click', () => {
       removeUnused: $<HTMLInputElement>('removeUnused').checked,
       language: ui.lang,
       ai: ai.enabled ? { provider: ai.provider, model: ai.model, baseUrl: ai.baseUrl, key: ai.key } : undefined,
+      config: advanced,
     },
   };
   const transfer: Transferable[] = [];

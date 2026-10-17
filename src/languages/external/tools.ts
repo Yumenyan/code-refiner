@@ -63,8 +63,9 @@ export const gofmtFormatter: FormatterAdapter = {
 
 export const rustfmtFormatter: FormatterAdapter = {
   id: 'rustfmt',
-  async format(source) {
-    const r = await run('rustfmt', ['--emit', 'stdout', '--edition', '2021'], source);
+  async format(source, _file, opts) {
+    const edition = opts?.edition && /^20\d\d$/.test(opts.edition) ? opts.edition : '2021';
+    const r = await run('rustfmt', ['--emit', 'stdout', '--edition', edition], source);
     if (r.code !== 0) throw new Error(r.stderr.split('\n')[0] || 'rustfmt failed');
     return r.stdout.replace(/^stdin:\n\n/, '');
   },

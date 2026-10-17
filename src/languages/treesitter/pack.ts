@@ -1,6 +1,11 @@
 import { fingerprint } from '../../core/text.js';
+import type { Suggestion } from '../../core/types.js';
 import type { FileSemantic, FunctionInfo } from '../../semantic/model.js';
 import type { FormatterAdapter, LanguagePack, SyntaxOutcome } from '../types.js';
+import { inferIndent } from '../prettier.js';
+import { reflow } from './reflow.js';
+import { ADAPTERS } from './lang-adapters.js';
+import { applyEdits, planRenames, ruleEdits, TS_RULES } from './refactor.js';
 import { loadLanguage, newParser, type Parser, type SyntaxNode } from './runtime.js';
 
 export interface TreeSitterSpec {
@@ -17,6 +22,8 @@ export interface TreeSitterSpec {
   formatter?: FormatterAdapter | null;
   /** How to prove a formatter did not change meaning. */
   equivalence?: 'tokens' | 'trust';
+  /** Built-in whitespace-only layout used when no native formatter is available (always verified). */
+  reflow?: { indent?: string };
 }
 
 const BRANCH = new Set([
@@ -53,7 +60,7 @@ function leaves(root: SyntaxNode): string[] {
   const out: string[] = [];
   const walk = (n: SyntaxNode): void => {
     if (n.childCount === 0) {
-      if (n.text.length) out.push(n.text);
+      if (n.text.trim()) out.push(n.text); // whitespace-only leaves are automatic semicolons / layout
       return;
     }
     for (let i = 0; i < n.childCount; i++) walk(n.child(i)!);
@@ -130,7 +137,7 @@ export function treeSitterPack(spec: TreeSitterSpec): LanguagePack & { init(): P
     displayName: spec.displayName,
     extensions: spec.extensions,
     formatter: spec.formatter ?? { id: 'none', format: async (s) => s },
-    rules: [],
+    rules: (TS_RULES[spec.id] ?? []).map((r) => ({ ...r })),
     async init() {
       if (!parser) parser = newParser(await loadLanguage(spec.wasm));
     },
@@ -174,40 +181,113 @@ export function treeSitterPack(spec: TreeSitterSpec): LanguagePack & { init(): P
         return {};
       }
     },
-    async refine({ file, source }) {
+    async refine({ file, source, config, project }) {
       const out = { code: source, changes: [], suggestions: [], warnings: [] } as Awaited<ReturnType<LanguagePack['refine']>>;
       const warn = (code: string, message: string) => out.warnings.push({ code, message, file });
-      const before = parse(source);
-      if (before.rootNode.hasError) {
-        before.delete();
+      const first = parse(source);
+      if (first.rootNode.hasError) {
+        first.delete();
         warn('syntax-error', 'Skipped: could not parse');
         return out;
       }
-      const beforeLeaves = spec.equivalence === 'tokens' ? leaves(before.rootNode) : null;
-      before.delete();
-      if (!spec.formatter) return out;
-      try {
-        const formatted = await spec.formatter.format(source, file);
-        if (formatted === source) return out;
-        const after = parse(formatted);
-        const bad = after.rootNode.hasError;
-        const same = !beforeLeaves || (() => {
-          const a = leaves(after.rootNode);
-          return a.length === beforeLeaves.length && a.every((x, i) => x === beforeLeaves[i]);
-        })();
-        after.delete();
-        if (bad) warn('format-skipped', 'Formatter output did not parse; left unformatted');
-        else if (!same) warn('format-skipped', 'Formatter changed more than whitespace; left unformatted');
-        else {
-          out.code = formatted;
-          out.changes.push({ file, kind: 'format', ruleId: 'format', level: 'safe', description: `Formatted (${spec.formatter.id})`, confidence: 1 });
+      first.delete();
+      let current = source;
+      const adapter = ADAPTERS[spec.id];
+
+      // ---- 1. safe, language specific rules (text edits, re-parsed) ----------------------------------
+      if (adapter) {
+        const tree = parse(current);
+        const edits = ruleEdits(spec.id, tree.rootNode, current);
+        tree.delete();
+        if (edits.length) {
+          const candidate = applyEdits(current, edits);
+          const check = parse(candidate);
+          const ok = !check.rootNode.hasError;
+          check.delete();
+          if (ok) {
+            current = candidate;
+            for (const e of edits) out.changes.push({ file, kind: 'refactor', ruleId: e.ruleId, level: 'safe', description: e.description, loc: { line: e.line, column: 1 }, confidence: 1 });
+          } else warn('rule-rolled-back', `${spec.displayName} rules: result did not parse again; reverted`);
         }
-      } catch (e) {
-        warn('format-failed', (e as Error).message.split('\n')[0]);
       }
+
+      // ---- 2. renames from data flow (+ optional AI), proven token by token ----------------------------
+      // Two passes: the first rename (`x` -> `active_stations`) is the evidence the second one needs.
+      if (adapter && config.renameVariables) {
+        const key = (sg: Suggestion) => `${sg.loc?.line}|${(sg.message.match(/"([^"]+)"/) ?? sg.message.match(/rename (\S+) →/) ?? [])[1]}`;
+        for (let pass = 0; pass < 2; pass++) {
+          const tree = parse(current);
+          const plan = await planRenames({ a: adapter, root: tree.rootNode, source: current, file, config, project });
+          const beforeLeaves = leaves(tree.rootNode);
+          const beforeShape = tree.rootNode.toString();
+          tree.delete();
+          const appliedKeys = new Set(plan.suggestions.filter((x) => x.details?.applied === true).map(key));
+          const have = new Set(out.suggestions.map((x) => `${key(x)}|${x.message}`));
+          out.suggestions = out.suggestions.filter((x) => x.details?.applied === true || !appliedKeys.has(key(x)));
+          out.suggestions.push(...plan.suggestions.filter((x) => !have.has(`${key(x)}|${x.message}`)));
+          if (!plan.edits.length) break;
+          const candidate = applyEdits(current, plan.edits);
+          const check = parse(candidate);
+          const after = leaves(check.rootNode);
+          const ok =
+            !check.rootNode.hasError &&
+            check.rootNode.toString() === beforeShape &&
+            after.length === beforeLeaves.length &&
+            after.every((x, i) => x === beforeLeaves[i] || plan.renamedPairs.has(`${beforeLeaves[i]}\u0000${x}`));
+          check.delete();
+          if (!ok) {
+            out.suggestions = out.suggestions.filter((x) => x.details?.applied !== true);
+            warn('rule-rolled-back', `${spec.displayName} renames: the result changed more than the renamed identifiers; reverted`);
+            break;
+          }
+          current = candidate;
+          out.changes.push(...plan.changes);
+        }
+      }
+
+      // ---- 3. formatting: native tool, or the built-in whitespace-only layout ----------------------------
+      const before = parse(current);
+      const useBuiltin = !spec.formatter && !!spec.reflow;
+      const proof = useBuiltin || spec.equivalence === 'tokens';
+      const beforeLeaves = proof ? leaves(before.rootNode) : null;
+      const beforeShape = proof ? before.rootNode.toString() : '';
+      let builtinText: string | null = null;
+      if (useBuiltin) {
+        const ind = spec.reflow!.indent ?? (() => {
+          const i = inferIndent(source);
+          return i?.useTabs ? '\t' : ' '.repeat(i?.tabWidth ?? 4);
+        })();
+        builtinText = reflow(current, before.rootNode, { indent: ind, splitStatements: true });
+      }
+      before.delete();
+      if (spec.formatter || builtinText) {
+        const formatterId = spec.formatter?.id ?? 'builtin-reflow';
+        try {
+          const formatted = builtinText ?? (await spec.formatter!.format(current, file, { edition: config?.target?.[spec.id] }));
+          if (formatted !== current) {
+            const after = parse(formatted);
+            const bad = after.rootNode.hasError;
+            // Same tokens in the same order AND the same tree shape: only whitespace can have changed.
+            const same = !beforeLeaves || (() => {
+              const a = leaves(after.rootNode);
+              return a.length === beforeLeaves.length && a.every((x, i) => x === beforeLeaves[i]) && after.rootNode.toString() === beforeShape;
+            })();
+            after.delete();
+            if (bad) warn('format-skipped', 'Formatter output did not parse; left unformatted');
+            else if (!same) warn('format-skipped', 'Formatter changed more than whitespace; left unformatted');
+            else {
+              current = formatted;
+              out.changes.push({ file, kind: 'format', ruleId: 'format', level: 'safe', description: `Formatted (${formatterId})`, confidence: 1 });
+            }
+          }
+        } catch (e) {
+          warn('format-failed', (e as Error).message.split('\n')[0]);
+        }
+      }
+      out.code = current;
       return out;
     },
-    isEquivalent: spec.equivalence === 'trust' ? undefined : (a, b) => {
+    isEquivalent: spec.equivalence === 'trust' && !spec.reflow ? undefined : (a, b) => {
       try {
         const ta = parse(a);
         const tb = parse(b);

@@ -23,7 +23,8 @@ export interface RuleHit {
   confidence?: number;
 }
 
-export function rulesFor<T, C>(rules: Rule<T, C>[], mode: RefactorLevel): Rule<T, C>[] {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function rulesFor<R extends Pick<Rule<any, any>, 'level'>>(rules: R[], mode: RefactorLevel): R[] {
   return rules.filter((r) => LEVEL_ORDER[r.level] <= LEVEL_ORDER[mode]);
 }
 

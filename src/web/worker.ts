@@ -46,6 +46,8 @@ export interface WorkerRequest {
     removeUnused: boolean;
     language: 'en' | 'ja';
     ai?: { provider: 'anthropic' | 'openai' | 'gemini' | 'local'; model: string; baseUrl: string; key: string };
+    /** Advanced settings from the page (merged over the defaults). */
+    config?: Record<string, unknown>;
   };
 }
 
@@ -68,6 +70,7 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
   const post = (m: unknown, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(m, transfer);
   try {
     const config = resolveConfig({
+      ...(req.options.config ?? {}),
       mode: req.options.mode,
       renameVariables: req.options.renameVariables,
       removeUnused: req.options.removeUnused,
@@ -75,6 +78,7 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
       language: req.options.language,
       ai: req.options.ai ? { provider: req.options.ai.provider, model: req.options.ai.model, baseUrl: req.options.ai.baseUrl, apiKeyEnv: '', timeoutMs: 60_000 } : undefined,
       validationOptions: { typecheck: false, runCommands: false, commandTimeoutMs: 1000 },
+      ...(req.options.config?.thresholds ? { thresholds: { ...resolveConfig({}).thresholds, ...(req.options.config.thresholds as object) } } : {}),
     });
     const project = req.zip
       ? scanZipBuffer(new Uint8Array(req.zip), req.name, config)

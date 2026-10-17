@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { createReadStream } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { resolveConfig, type Config } from '../core/config.js';
+import { mergeConfigs, resolveConfig, type Config } from '../core/config.js';
 import { scanZipBuffer } from '../core/scanner.js';
 import { refineProject } from '../pipeline.js';
 import { writeOutputs } from '../node.js';
@@ -96,8 +96,14 @@ export async function startUi(opts: UiOptions): Promise<{ server: Server; url: s
           const providerParam = url.searchParams.get('provider') ?? opts.baseConfig?.ai?.provider ?? 'anthropic';
           if (!AI_PROVIDERS.includes(providerParam as never)) return send(res, 400, { error: `Unknown AI provider: ${providerParam}` });
           const wantsAi = url.searchParams.get('ai') === '1' || !!opts.baseConfig?.aiAdvisor;
+          let extra: unknown = {};
+          try {
+            extra = JSON.parse(url.searchParams.get('cfg') ?? '{}');
+          } catch {
+            return send(res, 400, { error: 'cfg is not valid JSON' });
+          }
           const config = resolveConfig({
-            ...opts.baseConfig,
+            ...mergeConfigs(opts.baseConfig, extra),
             mode,
             aiAdvisor: wantsAi,
             removeUnused: url.searchParams.get('removeUnused') === '1' || opts.baseConfig?.removeUnused,

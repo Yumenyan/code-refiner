@@ -51,7 +51,9 @@ function inferPrintWidth(source: string): number {
 export function prettierFormatter(opts: PrettierFormatterOptions, overrides: PrettierOptions = {}): FormatterAdapter {
   return {
     id: `prettier:${opts.parser}`,
-    async format(source) {
+    async format(source, _file, fmt) {
+      // Old engines (Rhino, ES5 browsers) choke on trailing commas and some modern punctuation.
+      const legacy: PrettierOptions = fmt?.ecma && fmt.ecma < 2017 ? { trailingComma: 'none', quoteProps: fmt.ecma < 5 ? 'preserve' : 'as-needed' } : {};
       const base: PrettierOptions = {
         printWidth: opts.inferQuotes ? inferPrintWidth(source) : 100,
         tabWidth: 2,
@@ -59,7 +61,7 @@ export function prettierFormatter(opts: PrettierFormatterOptions, overrides: Pre
         ...(opts.inferQuotes ? { singleQuote: inferSingleQuote(source) } : {}),
         ...(opts.inferQuotes ? inferIndent(source) ?? {} : {}),
       };
-      return (await getPrettier()).format(source, { ...base, ...overrides, parser: opts.parser });
+      return (await getPrettier()).format(source, { ...base, ...overrides, ...legacy, parser: opts.parser });
     },
   };
 }

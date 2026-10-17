@@ -15,6 +15,8 @@ export interface Ui {
   t(key: string, params?: Record<string, string | number>): string;
   say(text: string, err?: boolean): void;
   ai(): AiOptions;
+  /** Advanced settings as a config fragment; throws with a readable message when the JSON is invalid. */
+  advanced(): Record<string, unknown>;
 }
 
 const PLACEHOLDERS: Record<string, { model: string; base: string }> = {
@@ -26,6 +28,14 @@ const PLACEHOLDERS: Record<string, { model: string; base: string }> = {
 
 /** Applies translations, wires the language selector and the AI settings box. */
 export function initUi(): Ui {
+  // Any startup problem is shown on the page instead of leaving dead controls behind.
+  window.addEventListener('error', (e) => {
+    const m = document.getElementById('msg');
+    if (m) {
+      m.textContent = `${UI_STRINGS[detectUiLang()].uiError}${e.message}`;
+      m.className = 'err';
+    }
+  });
   let lang: UiLang = (() => {
     try {
       const saved = localStorage.getItem('coderefiner.lang');
@@ -78,6 +88,48 @@ export function initUi(): Ui {
     say(text, err = false) {
       msg.textContent = text;
       msg.className = err ? 'err' : '';
+    },
+    advanced() {
+      const num = (id: string) => {
+        const v = $<HTMLInputElement>(id).value.trim();
+        return v === '' ? undefined : Number(v);
+      };
+      const cfg: Record<string, unknown> = {};
+      const target = $<HTMLSelectElement>('advTarget').value;
+      if (target) cfg.target = { javascript: target, typescript: target };
+      const apply = num('advApply');
+      if (apply !== undefined) cfg.renameApplyThreshold = apply;
+      const th: Record<string, number> = {};
+      for (const [id, key] of [['advSuggest', 'suggest'], ['advRecommend', 'recommend'], ['advAuto', 'autoApply']] as const) {
+        const v = num(id);
+        if (v !== undefined) th[key] = v;
+      }
+      if (Object.keys(th).length) cfg.thresholds = th;
+      const aiApply = num('advAiApply');
+      if (aiApply !== undefined) cfg.aiApplyThreshold = aiApply;
+      const map: Record<string, string> = {};
+      for (const item of $<HTMLInputElement>('advLangMap').value.split(/[,\s]+/).filter(Boolean)) {
+        const i = item.indexOf('=');
+        if (i > 0) map[item.slice(0, i).startsWith('.') ? item.slice(0, i) : `.${item.slice(0, i)}`] = item.slice(i + 1);
+      }
+      if (Object.keys(map).length) cfg.languageMap = map;
+      if ($<HTMLInputElement>('advSniff').checked) cfg.detectLanguageByContent = true;
+      const raw = $<HTMLTextAreaElement>('advJson').value.trim();
+      if (raw) {
+        let extra: unknown;
+        try {
+          extra = JSON.parse(raw);
+        } catch (e) {
+          throw new Error(t('badJson') + (e as Error).message);
+        }
+        const merge = (a: Record<string, unknown>, b: Record<string, unknown>): Record<string, unknown> => {
+          const out = { ...a };
+          for (const [k, v] of Object.entries(b)) out[k] = v && typeof v === 'object' && !Array.isArray(v) && out[k] && typeof out[k] === 'object' ? merge(out[k] as Record<string, unknown>, v as Record<string, unknown>) : v;
+          return out;
+        };
+        return merge(cfg, extra as Record<string, unknown>);
+      }
+      return cfg;
     },
     ai: () => ({
       enabled: aiToggle.checked,

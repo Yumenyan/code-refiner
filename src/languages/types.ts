@@ -10,11 +10,19 @@ export interface SyntaxOutcome {
   error?: string;
 }
 
+/** Per-run hints for formatters (language level the output must stay within). */
+export interface FormatOptions {
+  /** ECMAScript edition (3, 5, 2015 ...) the output must be valid in. */
+  ecma?: number;
+  /** Rust edition etc. */
+  edition?: string;
+}
+
 /** Wraps an external formatter (Prettier, rustfmt, Black, ...). The core never imports one directly. */
 export interface FormatterAdapter {
   id: string;
   /** Returns formatted text. May throw if the input cannot be parsed. */
-  format(source: string, file: string): Promise<string>;
+  format(source: string, file: string, opts?: FormatOptions): Promise<string>;
 }
 
 /**

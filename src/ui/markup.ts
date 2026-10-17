@@ -20,7 +20,8 @@ button:disabled{opacity:.5;cursor:default}#result{margin-top:30px;display:none}
 a.btn{font:inherit;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg);padding:10px 16px}
 #msg{margin-top:14px;font-size:14px;color:var(--muted)}#msg.err{color:var(--bad)}#where{margin-top:12px;color:var(--muted);font-size:13px;word-break:break-all}
 #aiBox{display:none;margin:4px 0 0 26px}#aiBox label{display:block;padding:6px 0 0;font-size:14px}#aiBox select,#aiBox input{font:inherit;width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);margin-top:4px}
-#aiBox p{font-size:13px;color:var(--muted);margin:8px 0 0}footer{margin-top:36px;color:var(--muted);font-size:13px}`;
+#aiBox p{font-size:13px;color:var(--muted);margin:8px 0 0}
+#adv{margin-top:22px;border:1px solid var(--line);border-radius:10px;background:var(--card);padding:4px 12px}#adv summary{cursor:pointer;font-weight:600;padding:8px 0}.advBox{padding:0 0 10px}.advBox label{display:block;padding:6px 0 0;font-size:14px}.advBox label.row{display:flex}.advBox select,.advBox input[type=number],.advBox input:not([type]),.advBox textarea{font:inherit;width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);margin-top:4px}.advBox textarea{font-family:ui-monospace,Menlo,monospace;font-size:13px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}footer{margin-top:36px;color:var(--muted);font-size:13px}`;
 
 export function renderPageHtml(variant: Variant, scriptHtml: string): string {
   const web = variant === 'web';
@@ -28,8 +29,10 @@ export function renderPageHtml(variant: Variant, scriptHtml: string): string {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CodeRefiner</title>
 <meta name="description" content="Restructure machine-written code into human-maintainable projects.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%232457d6'/%3E%3Cpath d='M4 8l3 3 5-6' stroke='white' stroke-width='2' fill='none'/%3E%3C/svg%3E">
 <style>${CSS}</style></head><body><main>
 <div class="top"><h1>CodeRefiner</h1><select id="lang" aria-label="Language"><option value="en">English</option><option value="ja">日本語</option></select></div>
+<noscript><p style="color:#b42318">JavaScript is required / JavaScript が必要です。</p></noscript>
 <div id="drop" tabindex="0" role="button"><b data-i18n="dropTitle">Drop a ZIP or folder here</b><span><span data-i18n="dropSub">or click to choose a ZIP file · </span><a href="#" id="pickFolder" data-i18n="pickFolder">choose a folder</a></span></div>
 <input type="file" id="fileInput" accept=".zip,application/zip" hidden>
 <input type="file" id="folderInput" webkitdirectory multiple hidden>
@@ -49,6 +52,18 @@ export function renderPageHtml(variant: Variant, scriptHtml: string): string {
 <label id="keyRow"><span data-i18n="aiKey">API key</span><input type="password" id="aiKey" autocomplete="off" placeholder="sk-…"></label>
 <p id="localNote" data-i18n="aiLocalNote"></p>
 </div></fieldset>
+<details id="adv"><summary data-i18n="advanced">Advanced settings</summary>
+<div class="advBox">
+<label><span data-i18n="advTarget">Language level</span><select id="advTarget"><option value="" data-i18n="targetLatest">Latest</option><option value="es3">ES3</option><option value="es5">ES5</option><option value="rhino">Rhino (ES5, old engine)</option><option value="es2015">ES2015 (ES6)</option><option value="es2017">ES2017</option><option value="es2020">ES2020</option></select><small data-i18n="advTargetHint"></small></label>
+<label><span data-i18n="advApply">Rename threshold</span><input id="advApply" type="number" min="0" max="1" step="0.01" placeholder="0.80"><small data-i18n="advApplyHint"></small></label>
+<div class="grid3"><label><span data-i18n="advSuggest">suggest</span><input id="advSuggest" type="number" min="0" max="1" step="0.01" placeholder="0.50"></label>
+<label><span data-i18n="advRecommend">recommend</span><input id="advRecommend" type="number" min="0" max="1" step="0.01" placeholder="0.80"></label>
+<label><span data-i18n="advAuto">auto</span><input id="advAuto" type="number" min="0" max="1" step="0.01" placeholder="0.95"></label></div>
+<label><span data-i18n="advAiApply">AI threshold</span><input id="advAiApply" type="number" min="0" max="2" step="0.01" placeholder="0.80"></label>
+<label><span data-i18n="advLangMap">Extension map</span><input id="advLangMap" placeholder=".rhino=javascript, .gs=javascript" autocomplete="off"><small data-i18n="advLangMapHint"></small></label>
+<label class="row"><input type="checkbox" id="advSniff"><span><span data-i18n="advSniff">Detect by content</span><small data-i18n="advSniffHint"></small></span></label>
+<label><span data-i18n="advJson">Config JSON</span><textarea id="advJson" rows="4" spellcheck="false" placeholder='{"complexity":{"maxNesting":3}}'></textarea><small data-i18n="advJsonHint"></small></label>
+</div></details>
 <button class="primary" id="go" disabled data-i18n="refine">REFINE</button>
 <div id="msg" role="status"></div>
 <section id="result">
